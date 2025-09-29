@@ -1,0 +1,209 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include "PM25Sensor.h"
+#include "Display.h"
+#include "AQICalculator.h"
+    delay(50);
+}
+
+// Implementation of sendData function
+void sendData(unsigned int pm1, unsigned int pm2_5, unsigned int pm10) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi not connected. Skipping data send.");
+        return;
+    }
+
+    Serial.println("==========");
+    Serial.print("Connecting to ");
+    Serial.println(host);
+
+    if (!client.connect(host, httpsPort)) {
+        Serial.println("Connection failed");
+        return;
+    }
+
+    String url = "/macros/s/" + GAS_ID + "/exec?pm1=" + String(pm1) + 
+                "&pm25=" + String(pm2_5) + 
+                "&pm10=" + String(pm10);
+
+    Serial.print("Requesting URL: ");
+    Serial.println(url);
+
+    client.print(String("GET ") + url + " HTTP/1.1\r\n" +
+                "Host: " + host + "\r\n" +
+                "User-Agent: BuildFailureDetectorESP8266\r\n" +
+                "Connection: close\r\n\r\n");
+
+    Serial.println("Request sent");
+
+    while (client.connected()) {
+        String line = client.readStringUntil('\n');
+        if (line == "\r") {
+            Serial.println("Headers received");
+            break;
+        }
+    }
+
+    String line = client.readStringUntil('\n');
+    if (line.startsWith("{\"state\":\"success\"")) {
+        Serial.println("Data upload successful!");
+    } else {
+        Serial.println("Data upload failed");
+    }
+
+    Serial.print("Response: ");
+    Serial.println(line);
+    Serial.println("Closing connection");
+    client.stop();
+    Serial.println("==========\n");
+} "AQICalculator.h"
+
+// WiFi Configuration
+const char* ssid = "BIOLOGY_2.4G";
+const char* password = "19012567";
+
+// Function declarations
+void sendData(unsigned int pm1, unsigned int pm2_5, unsigned int pm10);
+
+// Cloud Configuration
+const char* host = "script.google.com";
+const int httpsPort = 443;
+const String GAS_ID = "AKfycbz-Y-BkbIaTN43UiyIAukAkeaEeUT81PH32MRnP-Vna2OV-gotoJghNXDaojeWAaeY";
+
+// Component instances
+PM25Sensor pmSensor(14, 16);  // RX, TX pins
+Display display(128, 64);     // OLED display dimensions
+WiFiClientSecure client;
+
+// System state
+bool systemInitialized = false;
+unsigned long lastReadingTime = 0;
+const unsigned long READ_INTERVAL = 1000;  // 1 second interval
+
+
+void setup() {
+    Serial.begin(9600);
+    while (!Serial) {
+        delay(10);
+    }
+
+    // Initialize display
+    display.begin();
+    display.showStatus("Initializing...");
+
+    // Initialize PM2.5 sensor
+    pmSensor.begin();
+
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    display.showStatus("Connecting to WiFi...");
+
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println("\nWiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    // Configure secure client
+    client.setInsecure();
+
+    systemInitialized = true;
+    display.showStatus("System Ready!");
+    delay(1000);
+}
+
+
+void loop() {
+    if (!systemInitialized) {
+        display.showError("System not initialized");
+        delay(1000);
+        return;
+    }
+
+    // Read sensor data at specified intervals
+    if (millis() - lastReadingTime >= READ_INTERVAL) {
+        lastReadingTime = millis();
+        
+        // Read PM2.5 sensor data
+        PM25Sensor::PMData pmData = pmSensor.read();
+        
+        if (!pmData.isValid) {
+            display.showError("Sensor read error");
+            return;
+        }
+
+        // Calculate AQI
+        AQICalculator::AQIResult aqiResult = AQICalculator::calculateAQI(pmData.pm2_5);
+
+        // Update display with new readings and AQI information
+        display.showReadings(pmData.pm2_5, aqiResult.value, aqiResult.healthMessage);
+
+        // Log data
+        Serial.printf("PM2.5: %.1f μg/m³, AQI: %d (%s)\n", 
+                     pmData.pm2_5, 
+                     aqiResult.value, 
+                     aqiResult.category.c_str());
+
+        // Send data to cloud
+        sendData(pmData.pm1, pmData.pm2_5, pmData.pm10);
+    }
+
+    // Small delay to prevent CPU hogging
+    delay(50);
+
+
+
+
+}
+
+void sendData(unsigned int value, unsigned int value2, unsigned int value3) {
+  Serial.println("==========");
+  Serial.print("connecting to ");
+  Serial.println(host);
+
+  //----------------------------------------Connect ke Google host
+  if (!client.connect(host, httpsPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+  //----------------------------------------
+
+  //----------------------------------------Proses dan kirim data
+  //String string_temp =  String(value, DEC); // fungsi DEC mengakhiri value terakhir
+  unsigned int string_pm1 = value;
+  unsigned int string_pm25 = value2;
+  unsigned int string_pm10 = value3;
+  String url = "/macros/s/" + GAS_ID + "/exec?pm1=" + string_pm1 + "&pm25=" + string_pm25 + "&pm10=" + string_pm10;  // variabel disamakan dengan yang di script google sheets
+  Serial.print("requesting URL: ");
+  Serial.println(url);
+
+  client.print(String("GET ") + url + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "User-Agent: BuildFailureDetectorESP8266\r\n" + "Connection: close\r\n\r\n");
+
+  Serial.println("request sent");
+  //----------------------------------------
+
+  //----------------------------------------Check data terkirim atau tidak
+  while (client.connected()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r") {
+      Serial.println("headers received");
+      break;
+    }
+  }
+  String line = client.readStringUntil('\n');
+  if (line.startsWith("{\"state\":\"success\"")) {
+    Serial.println("esp8266/Arduino CI successfull!");
+  } else {
+    Serial.println("esp8266/Arduino CI has failed");
+  }
+  Serial.print("reply was : ");
+  Serial.println(line);
+  Serial.println("closing connection");
+  client.stop();
+  Serial.println("==========");
+  Serial.println();
+  //----------------------------------------
+}
