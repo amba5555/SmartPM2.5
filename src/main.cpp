@@ -1,20 +1,25 @@
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
 #include "PM25Sensor.h"
 #include "Display.h"
 #include "AQICalculator.h"
+#include "MQTTManager.h"
 
-// WiFi and Server Configuration
+// WiFi Configuration
 const char* ssid = "BIOLOGY_2.4G";
 const char* password = "19012567";
-const char* host = "script.google.com";
-const int httpsPort = 443;
-const String GAS_ID = "AKfycbz-Y-BkbIaTN43UiyIAukAkeaEeUT81PH32MRnP-Vna2OV-gotoJghNXDaojeWAaeY";
+
+// MQTT Topics
+const char* MQTT_TOPIC_SENSOR = "smartpm25/sensor/data";
+const char* MQTT_TOPIC_STATUS = "smartpm25/sensor/status";
 
 // Component instances
 PM25Sensor pmSensor(14, 16);  // RX, TX pins
 Display display(128, 64);     // OLED display dimensions
-WiFiClientSecure client;
+MQTTManager mqtt;
+
+// JSON document for MQTT messages
+StaticJsonDocument<200> jsonDoc;
 
 // System state
 bool systemInitialized = false;
@@ -60,8 +65,18 @@ void setup() {
         delay(2000);
     }
 
-    // Configure secure client
-    client.setInsecure();
+    // Initialize MQTT
+    display.showStatus("Init MQTT...");
+    mqtt.begin();
+    
+    // Connect to MQTT broker
+    if (mqtt.connect()) {
+        display.showStatus("MQTT Connected!");
+        delay(1000);
+    } else {
+        display.showStatus("MQTT Failed!");
+        delay(2000);
+    }
 
     systemInitialized = true;
     display.showStatus("Ready!");
@@ -128,43 +143,44 @@ void sendData(unsigned int pm1, unsigned int pm2_5, unsigned int pm10) {
     }
     lastUploadTime = millis();
 
-    if (!client.connect(host, httpsPort)) {
-        Serial.println("Connection failed");
-        return;
-    }
+    // Create JSON document
+    jsonDoc.clear();
+    
+    // Device Information
+    jsonDoc["device_id"] = MQTTConfig::DEVICE_ID;
+    
+    // Sensor Readings
+    JsonObject readings = jsonDoc.createNestedObject("readings");
+    readings["pm1"] = pm1;
+    readings["pm25"] = pm2_5;
+    readings["pm10"] = pm10;
+    
+    // Metadata
+    JsonObject metadata = jsonDoc.createNestedObject("metadata");
+    metadata["timestamp"] = millis();
+    metadata["wifi_rssi"] = WiFi.RSSI();
+    metadata["ip"] = WiFi.localIP().toString();
+    
+    // Calculate AQI
+    AQICalculator::AQIResult aqi = AQICalculator::calculateAQI(pm2_5);
+    JsonObject aqiData = jsonDoc.createNestedObject("aqi");
+    aqiData["value"] = aqi.value;
+    aqiData["category"] = aqi.category;
+    aqiData["health_message"] = aqi.healthMessage;
 
-    String url = "/macros/s/" + GAS_ID + "/exec?pm1=" + String(pm1) + 
-                "&pm25=" + String(pm2_5) + 
-                "&pm10=" + String(pm10);
+    // Serialize JSON to string
+    String jsonString;
+    serializeJson(jsonDoc, jsonString);
 
-    Serial.print("Requesting URL: ");
-    Serial.println(url);
-
-    client.print(String("GET ") + url + " HTTP/1.1\r\n" +
-                "Host: " + host + "\r\n" +
-                "User-Agent: BuildFailureDetectorESP8266\r\n" +
-                "Connection: close\r\n\r\n");
-
-    Serial.println("Request sent");
-
-    while (client.connected()) {
-        String line = client.readStringUntil('\n');
-        if (line == "\r") {
-            Serial.println("Headers received");
-            break;
-        }
-    }
-
-    String line = client.readStringUntil('\n');
-    if (line.startsWith("{\"state\":\"success\"")) {
-        Serial.println("Data upload successful!");
+    // Publish to MQTT
+    if (mqtt.publish(MQTTConfig::TOPIC_TELEMETRY, jsonString.c_str())) {
+        Serial.println("Data published successfully");
+        display.showStatus("Data Sent!");
     } else {
-        Serial.println("Data upload failed");
+        Serial.println("Failed to publish data");
+        display.showStatus("Send Failed!");
     }
 
-    Serial.print("Response: ");
-    Serial.println(line);
-    Serial.println("Closing connection");
-    client.stop();
-    Serial.println("==========\n");
+    // Keep MQTT connection alive
+    mqtt.loop();
 }

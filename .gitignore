@@ -3,3 +3,10 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# MQTT Configuration (contains sensitive credentials)
+include/MQTTConfig.h
+src/mqtt_config.cpp
+
+# Keep example files
+!include/MQTTConfig.example.h
