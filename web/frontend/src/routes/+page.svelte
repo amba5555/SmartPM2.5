@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick, onDestroy } from 'svelte';
+  import { fly, fade } from 'svelte/transition';
   // Accept route props to avoid unknown-prop warnings from SvelteKit
   // This page doesn't use route params; export a const to silence the Svelte plugin warning
   export const params = undefined;
@@ -18,6 +19,7 @@
   let errorLatest = null;
   let loadingHistory = true;
   let errorHistory = null;
+  let currentPeriod = 'realtime';
 
   onMount(async () => {
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
@@ -27,6 +29,7 @@
   });
 
   async function loadLatestReading() {
+    const prevReading = latestReading;
     loadingLatest = true;
     errorLatest = null;
     const endpoint = new URL('/api/readings/latest', BACKEND_BASE).toString();
@@ -39,7 +42,12 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         const data = await response.json();
         console.log('Data received:', data);
-        latestReading = data;
+        
+        // Smooth transition: only update if data actually changed
+        if (!prevReading || data.id !== prevReading.id) {
+          await tick(); // Ensure DOM is ready
+          latestReading = data;
+        }
         errorLatest = null;
         break;
       } catch (err) {
@@ -59,6 +67,7 @@
   }
 
   async function loadHistory(period = 'realtime') {
+    currentPeriod = period;
     loadingHistory = true;
     errorHistory = null;
     
@@ -120,7 +129,13 @@
   }
 
   function setupPolling() {
-    setInterval(loadLatestReading, 10000); // Poll every 10 seconds
+    setInterval(async () => {
+      await loadLatestReading();
+      // Auto-refresh historical data if on real-time view
+      if (currentPeriod === 'realtime') {
+        await loadHistory('realtime');
+      }
+    }, 10000); // Poll every 10 seconds
   }
 
   // Helper function to get AQI color for charts
@@ -285,85 +300,170 @@
   });
 
   function getAQIColor(aqi) {
-    if (aqi <= 50) return 'green';
-    if (aqi <= 100) return 'yellow';
-    if (aqi <= 150) return 'orange';
-    if (aqi <= 200) return 'red';
-    return 'purple';
+    if (aqi <= 50) return '#22c55e'; // Green
+    if (aqi <= 100) return '#f59e0b'; // Yellow
+    if (aqi <= 150) return '#f97316'; // Orange
+    if (aqi <= 200) return '#ef4444'; // Red
+    return '#9333ea'; // Purple
+  }
+
+  function getAQIBackgroundColor(aqi) {
+    if (aqi <= 50) return '#22c55e'; // Green
+    if (aqi <= 100) return '#fbbf24'; // Yellow
+    if (aqi <= 150) return '#f97316'; // Orange
+    if (aqi <= 200) return '#ef4444'; // Red
+    return '#9333ea'; // Purple
   }
 
   function getHealthMessage(aqi) {
-    if (aqi <= 50) return 'Good air quality';
-    if (aqi <= 100) return 'Moderate - sensitive groups should limit exertion';
-    if (aqi <= 150) return 'Unhealthy for sensitive groups';
+    if (aqi <= 50) return 'Good';
+    if (aqi <= 100) return 'Moderate';
+    if (aqi <= 150) return 'Unhealthy for Sensitive Groups';
     if (aqi <= 200) return 'Unhealthy';
-    return 'Very unhealthy';
+    return 'Very Unhealthy';
+  }
+
+  function getFaceEmoji(aqi) {
+    if (aqi <= 50) return '😊'; // Happy face for good air
+    if (aqi <= 100) return '😐'; // Neutral face for moderate
+    if (aqi <= 150) return '😷'; // Mask face for unhealthy for sensitive groups
+    if (aqi <= 200) return '😰'; // Worried face for unhealthy
+    return '🤢'; // Sick face for very unhealthy
   }
 </script>
 
-<main style="max-width: 1200px; margin: 0 auto; padding: 1rem;">
-  <h1 style="font-size: 1.875rem; font-weight: bold; margin-bottom: 1.5rem;">Smart PM2.5 Dashboard</h1>
-  <p style="margin-bottom: 1rem; font-size: 0.875rem; color: #666;">Backend URL: {BACKEND_BASE.toString()}</p>
-
-  <div style="background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 1.5rem; margin-bottom: 1.5rem;">
-    <h2 class="text-xl font-semibold mb-4">Current Reading</h2>
-    {#if loadingLatest}
-      <p>Loading latest reading...</p>
-    {:else if errorLatest}
-      <p style="color: red;">Error: {errorLatest}</p>
-      <div style="margin-top: 0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <button style="padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={wakeBackend}>Wake backend</button>
-        <button style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={loadLatestReading}>Retry</button>
-      </div>
-    {:else if latestReading}
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-        <div style="text-align: center;">
-          <div style="font-size: 1.5rem; font-weight: bold; color: {getAQIColor(latestReading.aqi)};">{latestReading.aqi}</div>
-          <div style="font-size: 0.875rem; color: #666;">AQI</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="font-size: 1.5rem; font-weight: bold;">{latestReading.pm25}</div>
-          <div style="font-size: 0.875rem; color: #666;">PM2.5 (µg/m³)</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="font-size: 1.5rem; font-weight: bold;">{latestReading.pm10}</div>
-          <div style="font-size: 0.875rem; color: #666;">PM10 (µg/m³)</div>
-        </div>
-        <div style="text-align: center;">
-          <div style="font-size: 1.5rem; font-weight: bold;">{latestReading.wifi_rssi}</div>
-          <div style="font-size: 0.875rem; color: #666;">WiFi RSSI</div>
-        </div>
-      </div>
-      <div style="margin-top: 1rem; padding: 0.75rem; background: #f0f0f0; border-radius: 0.25rem;">
-        <strong>Health Recommendation:</strong> {getHealthMessage(latestReading.aqi)}
-      </div>
-    {:else}
-      <p>No data available.</p>
-    {/if}
+<main style="max-width: 400px; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
+  
+  <!-- Header -->
+  <div style="text-align: center; margin-bottom: 2rem;">
+    <h1 style="font-size: 1.5rem; font-weight: 600; color: #333; margin: 0;">📍 Bueng Bun</h1>
+    <p style="font-size: 0.875rem; color: #666; margin: 0.5rem 0 0 0;">1.4K followers • {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })}</p>
   </div>
 
-  <div style="background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 1.5rem;">
-    <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Historical Data</h2>
-    <div style="margin-bottom: 1rem;">
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('realtime')}>Live</button>
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('5min')}>5min</button>
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('30min')}>30min</button>
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('1h')}>1h</button>
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('4h')}>4h</button>
-      <button style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('24h')}>24h</button>
+  <!-- Main Hero Card -->
+  {#if loadingLatest}
+    <div style="background: #f0f0f0; border-radius: 1rem; padding: 2rem; text-align: center; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+      <div style="font-size: 1.125rem; color: #666;">Loading...</div>
     </div>
+  {:else if errorLatest}
+    <div style="background: #fee; border-radius: 1rem; padding: 2rem; text-align: center; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+      <p style="color: #d32f2f; margin-bottom: 1rem;">Error: {errorLatest}</p>
+      <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+        <button 
+          style="padding: 0.75rem 1.5rem; background: #10b981; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 500;"
+          on:click={wakeBackend}
+        >
+          Wake backend
+        </button>
+        <button 
+          style="padding: 0.75rem 1.5rem; background: #3b82f6; color: white; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 500;"
+          on:click={loadLatestReading}
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  {:else if latestReading}
+    <div 
+      style="background: {getAQIBackgroundColor(latestReading.aqi)}; border-radius: 1rem; padding: 2rem; margin-bottom: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative; overflow: hidden;"
+      in:fly={{ y: 20, duration: 300 }} out:fade={{ duration: 200 }}
+    >
+      <!-- Subtle gradient overlay -->
+      <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.05) 100%);"></div>
+      
+      <!-- Content -->
+      <div style="position: relative; z-index: 2;">
+        <!-- AQI and Status Row -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+          <!-- AQI Box -->
+          <div style="background: rgba(0,0,0,0.15); padding: 0.75rem 1rem; border-radius: 0.75rem; backdrop-filter: blur(10px);">
+            <div style="font-size: 1.75rem; font-weight: bold; color: white; margin: 0;">{latestReading.aqi}<span style="font-size: 0.75rem; font-weight: normal;">*</span></div>
+            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">US AQI*</div>
+          </div>
+          
+          <!-- Status and Face -->
+          <div style="text-align: right;">
+            <div style="font-size: 1.5rem; font-weight: 600; color: white; margin-bottom: 0.25rem;">{getHealthMessage(latestReading.aqi)}</div>
+            <div style="font-size: 2rem; margin: 0;">{getFaceEmoji(latestReading.aqi)}</div>
+          </div>
+        </div>
+
+        <!-- PM2.5 Info -->
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="color: rgba(255,255,255,0.95); font-size: 1rem; font-weight: 500;">Main pollutant: PM2.5</div>
+          <div style="color: white; font-size: 1.125rem; font-weight: 600;">{latestReading.pm25} μg/m³</div>
+        </div>
+      </div>
+    </div>
+  {:else}
+    <div style="background: #f0f0f0; border-radius: 1rem; padding: 2rem; text-align: center; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+      <div style="font-size: 1.125rem; color: #666;">No data available</div>
+    </div>
+  {/if}
+
+  <!-- Weather Info Row (Static for now) -->
+  <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: flex; justify-content: space-around; align-items: center;">
+    <div style="text-align: center;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">🌫️</div>
+      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">30°</div>
+    </div>
+    <div style="text-align: center;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">💨</div>
+      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">13.3 km/h</div>
+    </div>
+    <div style="text-align: center;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">💧</div>
+      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">76%</div>
+    </div>
+  </div>
+
+  <!-- Data Source -->
+  <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <div style="font-size: 0.875rem; color: #666; margin-bottom: 0.25rem;">Data provided by</div>
+      <div style="font-size: 0.875rem; font-weight: 600; color: #333;">* AQI modeled using sensor data</div>
+    </div>
+    <div style="color: #ccc;">›</div>
+  </div>
+
+  <!-- Time Period Buttons -->
+  <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08);">
+    <h3 style="font-size: 1.125rem; font-weight: 600; color: #333; margin: 0 0 1rem 0;">Historical Data</h3>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+      {#each [
+        { label: 'Live', value: 'realtime' },
+        { label: '5min', value: '5min' },
+        { label: '30min', value: '30min' },
+        { label: '1h', value: '1h' },
+        { label: '4h', value: '4h' },
+        { label: '24h', value: '24h' }
+      ] as period}
+        <button 
+          style="padding: 0.5rem 1rem; background: {currentPeriod === period.value ? getAQIBackgroundColor(latestReading?.aqi || 50) : '#f1f5f9'}; color: {currentPeriod === period.value ? 'white' : '#64748b'}; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 500; font-size: 0.875rem; transition: all 0.2s ease;"
+          on:click={() => loadHistory(period.value)}
+        >
+          {period.label}
+        </button>
+      {/each}
+    </div>
+
+    <!-- Chart Section -->
     {#if loadingHistory}
-      <p>Loading history...</p>
+      <div style="text-align: center; padding: 2rem; color: #666;">
+        <div style="font-size: 1rem;">Loading history...</div>
+      </div>
     {:else if errorHistory}
-      <p style="color: red;">Error: {errorHistory}</p>
-    {:else}
-      <!-- Chart container with modern styling -->
-      <div style="position: relative; height: 400px; width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 12px; padding: 1rem; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05); display: {historyData.length>0 ? 'block' : 'none'};">
+      <div style="text-align: center; padding: 2rem; color: #d32f2f;">
+        <div style="font-size: 1rem;">Error: {errorHistory}</div>
+      </div>
+    {:else if historyData.length > 0}
+      <div style="position: relative; height: 300px; width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 0.75rem; padding: 1rem; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);">
         <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
       </div>
-      {#if historyData.length === 0}
-        <p>No historical data available.</p>
-      {/if}
+    {:else}
+      <div style="text-align: center; padding: 2rem; color: #666;">
+        <div style="font-size: 1rem;">No historical data available</div>
+      </div>
     {/if}
   </div>
 </main>
