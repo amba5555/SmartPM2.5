@@ -163,6 +163,20 @@ async def health():
 @app.get("/api/readings/latest")
 async def get_latest_reading():
     try:
+        # Prefer real device data over known integration test rows.
+        # First try to fetch the most recent row that is NOT the integration test.
+        try:
+            filtered = supabase.table("readings")
+            # Exclude the known integration test device id. If you have more test ids,
+            # expand this check or add a dedicated 'is_test' column.
+            filtered_resp = filtered.select("*").neq("device_id", "INTEGRATION_TEST_001").order("timestamp", desc=True).limit(1).execute()
+            if getattr(filtered_resp, 'data', None):
+                return filtered_resp.data[0]
+        except Exception:
+            # If the filtered query fails for any reason, fall back to the unfiltered query below.
+            pass
+
+        # Fallback: return the most recent row regardless (covers cases where only test data exists).
         response = supabase.table("readings").select("*").order("timestamp", desc=True).limit(1).execute()
         if response.data:
             return response.data[0]
