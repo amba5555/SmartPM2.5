@@ -15,7 +15,14 @@ MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
 
-# Validate required env vars
-required_vars = [SUPABASE_URL, SUPABASE_KEY, MQTT_BROKER, MQTT_USERNAME, MQTT_PASSWORD]
-if not all(required_vars):
-    raise ValueError("Missing required environment variables. Check .env file.")
+# Validate required env vars and show which ones are missing
+required = {
+    "SUPABASE_URL": SUPABASE_URL,
+    "SUPABASE_KEY": SUPABASE_KEY,
+    "MQTT_BROKER": MQTT_BROKER,
+    "MQTT_USERNAME": MQTT_USERNAME,
+    "MQTT_PASSWORD": MQTT_PASSWORD,
+}
+missing = [name for name, val in required.items() if not val]
+if missing:
+    raise ValueError(f"Missing required environment variables: {', '.join(missing)}. Check web/backend/.env or environment.")

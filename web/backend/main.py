@@ -9,6 +9,10 @@ from datetime import datetime
 import json
 import config
 import logging
+import os
+import time
+from logging.handlers import RotatingFileHandler
+from fastapi import Request, HTTPException
 
 app = FastAPI(title="SmartPM2.5 Backend", version="1.0.0")
 
@@ -35,6 +39,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# Add a rotating file handler
+log_path = os.getenv("BACKEND_LOG_PATH", "./backend.log")
+handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3)
+handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logger.addHandler(handler)
 import uuid
 
 # Use an explicit client id to avoid collisions and make debugging easier
@@ -55,9 +64,8 @@ def on_message(client, userdata, msg):
         global last_received
         last_received = data
         logger.info(f"Received: {data}")
-
-        # Insert into Supabase
-        supabase.table("readings").insert({
+        # Insert into Supabase with retries
+        payload = {
             "device_id": data["device_id"],
             "pm1": data["readings"]["pm1"],
             "pm25": data["readings"]["pm25"],
@@ -66,7 +74,24 @@ def on_message(client, userdata, msg):
             "timestamp": data["metadata"]["timestamp"],
             "wifi_rssi": data["metadata"]["wifi_rssi"],
             "ip_address": data["metadata"]["ip"]
-        }).execute()
+        }
+
+        max_attempts = 3
+        delay = 0.5
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = supabase.table("readings").insert(payload).execute()
+                # Supabase client may include error info in resp.error or resp.get('error')
+                # Log and break on success
+                logger.info(f"Supabase insert response: {getattr(resp, 'data', resp)}")
+                break
+            except Exception as e:
+                logger.error(f"Supabase insert attempt {attempt} failed: {e}")
+                if attempt == max_attempts:
+                    logger.error("Max Supabase insert attempts reached; dropping message")
+                else:
+                    time.sleep(delay)
+                    delay *= 2
 
     except Exception as e:
         print(f"Error processing message: {e}")
@@ -103,7 +128,20 @@ async def shutdown_event():
 
 
 @app.get("/debug/mqtt")
-async def debug_mqtt():
+async def debug_mqtt(request: Request):
+    # Only enable debug endpoint if explicitly allowed via env var
+    if os.getenv("ENABLE_MQTT_DEBUG", "false").lower() not in ("1", "true", "yes"):
+        raise HTTPException(status_code=403, detail="debug endpoint disabled")
+
+    token = os.getenv("DEBUG_TOKEN")
+    if not token:
+        # If token is not configured, disallow access for safety
+        raise HTTPException(status_code=403, detail="debug endpoint not configured")
+
+    header_token = request.headers.get("x-debug-token") or request.headers.get("X-Debug-Token")
+    if header_token != token:
+        raise HTTPException(status_code=401, detail="invalid debug token")
+
     try:
         return {
             "connected": mqtt_connected,
@@ -111,7 +149,12 @@ async def debug_mqtt():
             "last_received": last_received,
         }
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "mqtt_connected": mqtt_connected}
 
 @app.get("/api/readings/latest")
 async def get_latest_reading():
