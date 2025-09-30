@@ -233,6 +233,118 @@ async def get_latest_batch(limit: int = 50):
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
 
+@app.get("/api/v1/readings/aggregated")
+async def get_aggregated_readings(timeframe: str = "1h"):
+    """Get aggregated PM2.5 readings using database-side aggregation for better performance"""
+    try:
+        from datetime import datetime, timedelta
+        
+        # Define timeframe configurations with appropriate bucket intervals
+        timeframe_configs = {
+            "5m": {"hours": 0, "minutes": 5, "bucket_interval": "10 seconds"},
+            "30m": {"hours": 0, "minutes": 30, "bucket_interval": "1 minute"},
+            "1h": {"hours": 1, "minutes": 0, "bucket_interval": "2 minutes"},
+            "4h": {"hours": 4, "minutes": 0, "bucket_interval": "10 minutes"},
+            "24h": {"hours": 24, "minutes": 0, "bucket_interval": "30 minutes"}
+        }
+        
+        config = timeframe_configs.get(timeframe)
+        if not config:
+            raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}")
+        
+        # Calculate start and end times
+        now = datetime.utcnow()
+        start_time = now - timedelta(hours=config["hours"], minutes=config["minutes"])
+        
+        # Call the Supabase RPC function for aggregation
+        # Note: We'll use a simple aggregation approach since time_bucket may not be available
+        # This approach groups by time intervals and calculates averages
+        response = supabase.rpc('get_aggregated_pm25', {
+            'start_time': start_time.isoformat(),
+            'end_time': now.isoformat(),
+            'bucket_interval': config["bucket_interval"]
+        }).execute()
+        
+        if hasattr(response, 'data') and response.data:
+            return {
+                "timeframe": timeframe,
+                "start_time": start_time.isoformat(),
+                "end_time": now.isoformat(),
+                "bucket_interval": config["bucket_interval"],
+                "data": response.data,
+                "count": len(response.data)
+            }
+        else:
+            # Fallback to simple aggregation if RPC function doesn't exist
+            return await get_aggregated_readings_fallback(timeframe, start_time, now, config["bucket_interval"])
+            
+    except Exception as e:
+        logger.error(f"Error in get_aggregated_readings: {str(e)}")
+        # Fallback to existing logic if aggregation fails
+        return await get_readings_history_fallback(timeframe)
+
+async def get_aggregated_readings_fallback(timeframe: str, start_time: datetime, end_time: datetime, bucket_interval: str):
+    """Fallback aggregation when database function is not available"""
+    try:
+        # Simple time-based aggregation using existing data
+        response = supabase.table("readings").select("created_at, pm25, aqi").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", start_time.isoformat() + "Z").lte("created_at", end_time.isoformat() + "Z").order("created_at", desc=False).execute()
+        
+        raw_data = response.data or []
+        
+        # Group data into time buckets for aggregation
+        bucket_size_minutes = {
+            "10 seconds": 1/6,
+            "1 minute": 1,
+            "2 minutes": 2,
+            "10 minutes": 10,
+            "30 minutes": 30
+        }.get(bucket_interval, 5)
+        
+        buckets = {}
+        for row in raw_data:
+            try:
+                created_at = datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))
+                # Round to bucket boundary
+                bucket_minutes = int(created_at.minute / bucket_size_minutes) * bucket_size_minutes
+                bucket_time = created_at.replace(minute=int(bucket_minutes), second=0, microsecond=0)
+                bucket_key = bucket_time.isoformat()
+                
+                if bucket_key not in buckets:
+                    buckets[bucket_key] = {'pm25_values': [], 'bucket_time': bucket_time}
+                buckets[bucket_key]['pm25_values'].append(float(row['pm25']))
+            except Exception as e:
+                continue
+        
+        # Calculate averages for each bucket
+        aggregated_data = []
+        for bucket_key in sorted(buckets.keys()):
+            bucket = buckets[bucket_key]
+            avg_pm25 = sum(bucket['pm25_values']) / len(bucket['pm25_values']) if bucket['pm25_values'] else 0
+            aggregated_data.append({
+                'bucket_time': bucket['bucket_time'].isoformat(),
+                'average_pm25': round(avg_pm25, 2)
+            })
+        
+        return {
+            "timeframe": timeframe,
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "bucket_interval": bucket_interval,
+            "data": aggregated_data,
+            "count": len(aggregated_data)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in fallback aggregation: {str(e)}")
+        raise HTTPException(status_code=500, detail="Aggregation failed")
+
+async def get_readings_history_fallback(timeframe: str):
+    """Fallback to existing history endpoint logic"""
+    # Map new timeframe format to existing period format
+    period_map = {"5m": "5min", "30m": "30min", "1h": "1h", "4h": "4h", "24h": "24h"}
+    period = period_map.get(timeframe, "1h")
+    return await get_readings_history(period)
+
 @app.get("/api/readings/history")
 async def get_readings_history(period: str = "1h", agg: str = "avg", buckets: int = None):
     """Get historical readings for different time periods with appropriate aggregation"""

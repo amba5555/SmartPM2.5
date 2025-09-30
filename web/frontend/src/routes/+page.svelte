@@ -5,10 +5,17 @@
   // This page doesn't use route params; export a const to silence the Svelte plugin warning
   export const params = undefined;
   import Chart from 'chart.js/auto';
+  import { createClient } from '@supabase/supabase-js';
 
-    const BACKEND_BASE = new URL(import.meta.env.VITE_BACKEND_URL || 'https://smartpm2-5.onrender.com'); // Replace with actual Render URL
-    const MAX_RETRIES = 6;
-    const RETRY_BASE_MS = 500; // ms
+  const BACKEND_BASE = new URL(import.meta.env.VITE_BACKEND_URL || 'https://smartpm2-5.onrender.com');
+  const MAX_RETRIES = 6;
+  const RETRY_BASE_MS = 500; // ms
+  
+  // Supabase client for realtime subscriptions
+  const supabase = createClient(
+    import.meta.env.VITE_SUPABASE_URL || '',
+    import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+  );
 
   let latestReading = null;
   let historyData = [];
@@ -20,12 +27,18 @@
   let errorLatest = null;
   let loadingHistory = true;
   let errorHistory = null;
-  let currentPeriod = 'realtime';
+  let currentPeriod = 'Live';
+  let realtimeSubscription = null;
+  let liveDataBuffer = [];
+  let isLiveMode = false;
+  
+  // Polling interval for non-live modes
+  let pollingInterval = null;
 
   onMount(async () => {
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
     await loadLatestReading();
-    await loadHistory('realtime'); // Default to real-time rolling data
+    await loadHistory('Live'); // Default to Live view
     setupPolling();
   });
 
@@ -80,50 +93,139 @@
     loadingLatest = false;
   }
 
-  async function loadHistory(period = 'realtime') {
+  async function loadHistory(period = 'Live') {
     currentPeriod = period;
     loadingHistory = true;
     errorHistory = null;
+    isLiveMode = period === 'Live';
     
-    let endpoint;
-    if (period === 'realtime') {
-      // Real-time: Last 50 rows, rolling
-      endpoint = new URL(`/api/readings/latest-batch?limit=50`, BACKEND_BASE).toString();
-    } else {
-      // Time-based periods
-      endpoint = new URL(`/api/readings/history?period=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
+    // Clean up existing realtime subscription
+    if (realtimeSubscription) {
+      await supabase.removeChannel(realtimeSubscription);
+      realtimeSubscription = null;
     }
     
-    console.log('Loading history from:', endpoint);
-    let attempt = 0;
-    while (attempt < MAX_RETRIES) {
+    let endpoint;
+    
+    if (period === 'Live') {
+      // Live mode: Get last 5 minutes of raw data + setup realtime subscription
+      endpoint = new URL(`/api/readings/latest-batch?limit=60`, BACKEND_BASE).toString(); // ~5 minutes at 5s intervals
+      
       try {
         const response = await fetch(endpoint, { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         const payload = await response.json();
-        // Backend returns { data: [...], count: N } — normalize to an array
         const rows = Array.isArray(payload) ? payload : (payload.data || []);
-        historyData = rows;
+        
+        // Store in live buffer and update chart
+        liveDataBuffer = rows.slice(-60); // Keep last 60 points
+        historyData = { data: liveDataBuffer };
+        
+        // Setup realtime subscription
+        setupRealtimeSubscription();
+        
         errorHistory = null;
-        // Only try to render the chart when we actually have points
-        if (historyData && historyData.length > 0) {
+        if (liveDataBuffer.length > 0) {
           await tick();
           updateChart();
         }
-        break;
       } catch (err) {
-        attempt += 1;
-        console.warn(`loadHistory attempt ${attempt} failed:`, err.message || err);
-        if (attempt >= MAX_RETRIES) {
-          errorHistory = err.message || String(err);
-          historyData = [];
-        } else {
-          const backoff = RETRY_BASE_MS * Math.pow(2, attempt - 1);
-          await new Promise(r => setTimeout(r, backoff));
+        console.error('Error loading live data:', err);
+        errorHistory = err.message || String(err);
+        historyData = [];
+      }
+    } else {
+      // Aggregated modes: Use new aggregated endpoint
+      endpoint = new URL(`/api/v1/readings/aggregated?timeframe=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
+      
+      console.log('Loading aggregated history from:', endpoint);
+      let attempt = 0;
+      while (attempt < MAX_RETRIES) {
+        try {
+          const response = await fetch(endpoint, { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          const payload = await response.json();
+          
+          // Transform aggregated data to match chart expectations
+          const aggregatedData = payload.data || [];
+          const transformedData = aggregatedData.map(item => ({
+            created_at: item.bucket_time,
+            pm25: item.average_pm25,
+            aqi: Math.round(item.average_pm25 * 4), // Simple AQI approximation
+            aggregated: true
+          }));
+          
+          historyData = { 
+            data: transformedData, 
+            timeframe: payload.timeframe,
+            bucket_interval: payload.bucket_interval,
+            aggregated: true
+          };
+          
+          errorHistory = null;
+          if (transformedData.length > 0) {
+            await tick();
+            updateChart();
+          }
+          break;
+        } catch (err) {
+          attempt += 1;
+          console.warn(`loadHistory attempt ${attempt} failed:`, err.message || err);
+          if (attempt >= MAX_RETRIES) {
+            errorHistory = err.message || String(err);
+            historyData = [];
+          } else {
+            const backoff = RETRY_BASE_MS * Math.pow(2, attempt - 1);
+            await new Promise(r => setTimeout(r, backoff));
+          }
         }
       }
     }
+    
     loadingHistory = false;
+  }
+
+  function setupRealtimeSubscription() {
+    if (!isLiveMode) return;
+    
+    console.log('Setting up realtime subscription for live mode');
+    
+    realtimeSubscription = supabase
+      .channel('readings-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'readings',
+          filter: 'device_id=neq.INTEGRATION_TEST_001'
+        },
+        (payload) => {
+          console.log('New reading received:', payload.new);
+          
+          if (isLiveMode && payload.new) {
+            // Add new reading to live buffer
+            liveDataBuffer.push(payload.new);
+            
+            // Keep only last 60 readings (5 minutes at 5s intervals)
+            if (liveDataBuffer.length > 60) {
+              liveDataBuffer = liveDataBuffer.slice(-60);
+            }
+            
+            // Update historyData and chart
+            historyData = { data: [...liveDataBuffer] };
+            updateChart();
+            
+            // Update latest reading if this is the newest
+            if (!latestReading || payload.new.id > latestReading.id) {
+              latestReading = payload.new;
+            }
+          }
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime subscription status:', status);
+      });
   }
 
   // Try to wake the backend (Render often sleeps idle containers). This will make a single
@@ -143,14 +245,27 @@
   }
 
   function setupPolling() {
-    setInterval(async () => {
-      // Load latest first; loadLatestReading will trigger history refresh for non-realtime when needed
-      await loadLatestReading();
-      // Auto-refresh historical data if on real-time view (keep real-time rolling)
-      if (currentPeriod === 'realtime') {
-        await loadHistory('realtime');
-      }
-    }, 10000); // Poll every 10 seconds
+    // Clear existing polling
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+    }
+    
+    // Only poll for latest reading in non-live modes
+    // Live mode gets updates via realtime subscription
+    if (!isLiveMode) {
+      pollingInterval = setInterval(async () => {
+        await loadLatestReading();
+        // Refresh aggregated data periodically for non-live modes
+        if (currentPeriod !== 'Live') {
+          await loadHistory(currentPeriod);
+        }
+      }, 30000); // Poll every 30 seconds for aggregated views
+    } else {
+      // In live mode, still poll for latest reading updates (hero card)
+      pollingInterval = setInterval(async () => {
+        await loadLatestReading();
+      }, 10000); // Poll every 10 seconds in live mode
+    }
   }
 
   // Helper function to get AQI color for charts
@@ -207,35 +322,33 @@
 
     if (chart) chart.destroy();
 
-    // If backend returned pre-aggregated buckets, use them to ensure equal-width time bins
-    let chartData;
-    if (historyData && historyData.buckets) {
-      chartData = historyData.buckets.map(b => {
-        const aqi = b.aqi;
-        const pm25 = b.pm25;
-        const timeLabel = (() => {
-          // Label use bucket end time for readability
-          try { return formatTimeGMT7(b.end); } catch (e) { return '' }
-        })();
-        const color = aqi != null ? getAQIChartColor(aqi) : { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.2)' };
-        return { pm25, aqi, time: timeLabel, color };
-      });
-    } else {
-      // fallback to raw rows
-      chartData = historyData.map(d => ({
-        pm25: d.pm25,
-        aqi: d.aqi,
-        time: formatTimeGMT7(d.created_at),
-        color: getAQIChartColor(d.aqi)
-      }));
+    // Get data array from historyData
+    const dataArray = isLiveMode ? liveDataBuffer : (historyData.data || []);
+    
+    if (!dataArray || dataArray.length === 0) {
+      console.warn('No data available for chart');
+      return;
     }
+
+    // Prepare data with AQI-based colors
+    const chartData = dataArray.map(d => ({
+      pm25: d.pm25,
+      aqi: d.aqi,
+      time: formatTimeGMT7(d.created_at),
+      color: getAQIChartColor(d.aqi),
+      aggregated: d.aggregated || false
+    }));
+
+    const chartTitle = isLiveMode ? 'PM2.5 (Live - Last 5 minutes)' : 
+                      historyData.aggregated ? `PM2.5 (${currentPeriod} - ${historyData.bucket_interval} averages)` :
+                      `PM2.5 (${currentPeriod})`;
 
     chart = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: chartData.map(d => d.time),
         datasets: [{
-          label: 'PM2.5 (μg/m³)',
+          label: chartTitle,
           data: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25),
           backgroundColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg),
           borderColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border),
@@ -268,24 +381,19 @@
             cornerRadius: 8,
             callbacks: {
               title: function(items) {
-                // items[0].label is already the time (bucket end). Keep it concise.
                 return items && items.length ? items[0].label : '';
               },
               label: function(context) {
                 const dataPoint = chartData[context.dataIndex] || {};
                 const parts = [];
-                if (dataPoint.pm25 !== null && dataPoint.pm25 !== undefined) parts.push(`PM2.5: ${dataPoint.pm25} μg/m³`);
-                if (dataPoint.aqi !== null && dataPoint.aqi !== undefined) parts.push(`AQI: ${dataPoint.aqi}`);
-                // If backend provided bucket meta via historyData.buckets, include count and range
-                if (historyData && historyData.buckets && historyData.buckets[context.dataIndex]) {
-                  const b = historyData.buckets[context.dataIndex];
-                  parts.push(`samples: ${b.count}`);
-                  // show human-readable range
-                  try {
-                    const start = new Date(b.start).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Bangkok' });
-                    const end = new Date(b.end).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Bangkok' });
-                    parts.push(`${start} — ${end}`);
-                  } catch (e) { /* ignore */ }
+                if (dataPoint.pm25 !== null && dataPoint.pm25 !== undefined) {
+                  parts.push(`PM2.5: ${dataPoint.pm25} μg/m³`);
+                }
+                if (dataPoint.aqi !== null && dataPoint.aqi !== undefined) {
+                  parts.push(`AQI: ${dataPoint.aqi}`);
+                }
+                if (dataPoint.aggregated) {
+                  parts.push('(aggregated)');
                 }
                 return parts;
               }
@@ -342,17 +450,30 @@
           mode: 'index'
         },
         animation: {
-          duration: 750,
+          duration: isLiveMode ? 200 : 750, // Faster animation for live updates
           easing: 'easeInOutQuart'
         }
       }
     });
   }
 
-  onDestroy(() => {
+  onDestroy(async () => {
+    // Cleanup chart
     if (chart) {
       try { chart.destroy(); } catch (e) { /* ignore */ }
       chart = null;
+    }
+    
+    // Cleanup realtime subscription
+    if (realtimeSubscription) {
+      await supabase.removeChannel(realtimeSubscription);
+      realtimeSubscription = null;
+    }
+    
+    // Cleanup polling
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
+      pollingInterval = null;
     }
   });
 
@@ -485,9 +606,9 @@
     <h3 style="font-size: 1.125rem; font-weight: 600; color: #333; margin: 0 0 1rem 0;">Historical Data</h3>
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;">
       {#each [
-        { label: 'Live', value: 'realtime' },
-        { label: '5min', value: '5min' },
-        { label: '30min', value: '30min' },
+        { label: 'Live', value: 'Live' },
+        { label: '5m', value: '5m' },
+        { label: '30m', value: '30m' },
         { label: '1h', value: '1h' },
         { label: '4h', value: '4h' },
         { label: '24h', value: '24h' }
@@ -510,8 +631,13 @@
       <div style="text-align: center; padding: 2rem; color: #d32f2f;">
         <div style="font-size: 1rem;">Error: {errorHistory}</div>
       </div>
-    {:else if historyData.length > 0}
+    {:else if (isLiveMode && liveDataBuffer.length > 0) || (!isLiveMode && historyData.data && historyData.data.length > 0)}
       <div style="position: relative; height: 300px; width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 0.75rem; padding: 1rem; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);">
+        {#if isLiveMode}
+          <div style="position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(34, 197, 94, 0.1); color: #16a34a; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 500;">
+            🔴 LIVE
+          </div>
+        {/if}
         <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
       </div>
     {:else}
