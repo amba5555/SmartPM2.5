@@ -119,19 +119,31 @@ npm install
 npm install @supabase/supabase-js chart.js
 ```
 
-- [ ] Configure Supabase client in `src/lib/supabase.js` (use anon/public key for read-only frontend queries).
-- [ ] Build main UI components:
-  - AQI card / gauge (color-coded by AQI level).
-  - Current readings (PM1, PM2.5, PM10, RSSI, IP).
-  - Health recommendations component (based on AQI bands).
-  - Historical chart component (24h, 7d, 30d) using Chart.js.
+- [x] Configure Supabase client in `src/lib/supabase.js` (use anon/public key for read-only frontend queries).
+- [x] Build main UI components:
+  - [x] AQI card / gauge (color-coded by AQI level).
+  - [x] Current readings (PM1, PM2.5, PM10, RSSI, IP).
+  - [x] Health recommendations component (based on AQI bands).
+  - [x] Historical chart component (24h, 7d, 30d) using Chart.js.
+  - [x] **Beautiful Bar Chart**: IQAir-inspired design with AQI colors
+  - [x] **Timezone Support**: GMT+7 conversion for local time display
+  - [x] **Server Timestamps**: Use `created_at` for proper chronological ordering
 
-- [ ] Data flow:
-  - Fetch latest reading on page load.
-  - Poll backend every 10s (or use WebSocket / Server-Sent Events for push updates).
-  - Allow selecting device_id to view different sensors (multi-sensor support).
+- [x] Data flow:
+  - [x] Fetch latest reading on page load.
+  - [x] Poll backend every 10s with retry/backoff logic.
+  - [x] Wake backend functionality for Render auto-sleep handling.
+  - [ ] Allow selecting device_id to view different sensors (multi-sensor support).
 
-- [ ] Test locally (`npm run dev`) and verify layout on desktop and mobile.
+- [x] **Chart Enhancements**:
+  - [x] Dynamic AQI-based bar colors (Green→Yellow→Orange→Red→Purple)
+  - [x] Rounded bars with modern styling
+  - [x] Gradient container background
+  - [x] Enhanced tooltips with PM2.5 and AQI values
+  - [x] Smooth animations and transitions
+  - [x] Responsive design for mobile/desktop
+
+- [x] Test locally (`npm run dev`) and verify layout on desktop and mobile.
 - [ ] Deploy to Vercel (connect GitHub repo, set env vars for production if needed).
 
 **Success criteria:** Dashboard displays live data and historical charts, updates within 10s.  

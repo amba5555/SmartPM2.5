@@ -216,21 +216,56 @@ async def get_latest_reading():
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
 
-@app.get("/api/readings/history")
-async def get_readings_history(period: str = "24h"):
-    """Get historical readings for a time period"""
+@app.get("/api/readings/latest-batch")
+async def get_latest_batch(limit: int = 50):
+    """Get the latest N readings for real-time rolling display"""
     try:
-        # Convert period to timestamp range
-        now = int(time.time() * 1000)  # Current timestamp in milliseconds
-        if period == "7d":
-            start_time = now - (7 * 24 * 60 * 60 * 1000)
-        elif period == "30d":
-            start_time = now - (30 * 24 * 60 * 60 * 1000)
-        else:  # 24h
-            start_time = now - (24 * 60 * 60 * 1000)
+        # Limit to reasonable range
+        limit = min(max(limit, 1), 200)
+        
+        response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").order("created_at", desc=True).limit(limit).execute()
+        if response.data:
+            # Reverse to get chronological order (oldest first)
+            data = list(reversed(response.data))
+            return {"data": data, "count": len(data)}
+        else:
+            return {"data": [], "count": 0}
+    except Exception as e:
+        return {"error": f"Database query failed: {str(e)}"}
 
-        response = supabase.table("readings").select("*").gte("timestamp", start_time).order("created_at").execute()
-        return {"data": response.data, "count": len(response.data)}
+@app.get("/api/readings/history")
+async def get_readings_history(period: str = "1h"):
+    """Get historical readings for different time periods with appropriate aggregation"""
+    try:
+        now = int(time.time() * 1000)  # Current timestamp in milliseconds
+        
+        # Define time ranges and limits
+        time_configs = {
+            "5min": {"duration": 5 * 60 * 1000, "limit": 60},  # 5 minutes, every 5s = ~60 points
+            "30min": {"duration": 30 * 60 * 1000, "limit": 60},  # 30 minutes, every 30s = ~60 points  
+            "1h": {"duration": 60 * 60 * 1000, "limit": 60},  # 1 hour, every 1min = ~60 points
+            "4h": {"duration": 4 * 60 * 60 * 1000, "limit": 48},  # 4 hours, every 5min = ~48 points
+            "24h": {"duration": 24 * 60 * 60 * 1000, "limit": 48},  # 24 hours, every 30min = ~48 points
+        }
+        
+        config = time_configs.get(period, time_configs["1h"])
+        start_time = now - config["duration"]
+        
+        # For short periods (5min, 30min), get more recent data points
+        if period in ["5min", "30min"]:
+            response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
+                datetime.fromtimestamp(start_time/1000).isoformat()).order("created_at").limit(config["limit"]).execute()
+        else:
+            # For longer periods, we might want to implement server-side aggregation later
+            response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
+                datetime.fromtimestamp(start_time/1000).isoformat()).order("created_at").execute()
+            
+            # Simple client-side sampling for now - take every Nth point
+            if len(response.data) > config["limit"]:
+                step = len(response.data) // config["limit"]
+                response.data = response.data[::step][:config["limit"]]
+        
+        return {"data": response.data, "count": len(response.data), "period": period}
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
 

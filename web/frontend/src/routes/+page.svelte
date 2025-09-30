@@ -22,7 +22,7 @@
   onMount(async () => {
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
     await loadLatestReading();
-    await loadHistory();
+    await loadHistory('realtime'); // Default to real-time rolling data
     setupPolling();
   });
 
@@ -58,10 +58,19 @@
     loadingLatest = false;
   }
 
-  async function loadHistory(period = '24h') {
+  async function loadHistory(period = 'realtime') {
     loadingHistory = true;
     errorHistory = null;
-    const endpoint = new URL(`/api/readings/history?period=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
+    
+    let endpoint;
+    if (period === 'realtime') {
+      // Real-time: Last 50 rows, rolling
+      endpoint = new URL(`/api/readings/latest-batch?limit=50`, BACKEND_BASE).toString();
+    } else {
+      // Time-based periods
+      endpoint = new URL(`/api/readings/history?period=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
+    }
+    
     console.log('Loading history from:', endpoint);
     let attempt = 0;
     while (attempt < MAX_RETRIES) {
@@ -114,6 +123,27 @@
     setInterval(loadLatestReading, 10000); // Poll every 10 seconds
   }
 
+  // Helper function to get AQI color for charts
+  function getAQIChartColor(aqi) {
+    if (aqi <= 50) return { bg: 'rgba(34, 197, 94, 0.8)', border: 'rgba(34, 197, 94, 1)' }; // Green
+    if (aqi <= 100) return { bg: 'rgba(251, 191, 36, 0.8)', border: 'rgba(251, 191, 36, 1)' }; // Yellow
+    if (aqi <= 150) return { bg: 'rgba(249, 115, 22, 0.8)', border: 'rgba(249, 115, 22, 1)' }; // Orange
+    if (aqi <= 200) return { bg: 'rgba(239, 68, 68, 0.8)', border: 'rgba(239, 68, 68, 1)' }; // Red
+    return { bg: 'rgba(147, 51, 234, 0.8)', border: 'rgba(147, 51, 234, 1)' }; // Purple
+  }
+
+  // Convert UTC timestamp to local time (GMT+7)
+  function formatTimeGMT7(utcTimestamp) {
+    const date = new Date(utcTimestamp);
+    // No need to add hours - created_at should already be in server timezone
+    return date.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Bangkok'
+    });
+  }
+
   function updateChart() {
     if (!chartCanvas) {
       // Retry a few times in case bind:this hasn't fired yet
@@ -135,16 +165,114 @@
 
     if (chart) chart.destroy();
 
+    // Prepare data with AQI-based colors
+    const chartData = historyData.map(d => ({
+      pm25: d.pm25,
+      aqi: d.aqi,
+      time: formatTimeGMT7(d.created_at),
+      color: getAQIChartColor(d.aqi)
+    }));
+
     chart = new Chart(ctx, {
-      type: 'line',
+      type: 'bar',
       data: {
-        labels: historyData.map(d => new Date(d.timestamp).toLocaleTimeString()),
+        labels: chartData.map(d => d.time),
         datasets: [{
-          label: 'PM2.5',
-          data: historyData.map(d => d.pm25),
-          borderColor: 'rgb(75, 192, 192)',
-          tension: 0.1
+          label: 'PM2.5 (μg/m³)',
+          data: chartData.map(d => d.pm25),
+          backgroundColor: chartData.map(d => d.color.bg),
+          borderColor: chartData.map(d => d.color.border),
+          borderWidth: 1,
+          borderRadius: 4,
+          borderSkipped: false,
         }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              font: {
+                size: 12,
+                weight: '500'
+              },
+              color: '#374151'
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            titleColor: '#fff',
+            bodyColor: '#fff',
+            borderColor: '#374151',
+            borderWidth: 1,
+            cornerRadius: 8,
+            callbacks: {
+              label: function(context) {
+                const dataPoint = chartData[context.dataIndex];
+                return [
+                  `PM2.5: ${dataPoint.pm25} μg/m³`,
+                  `AQI: ${dataPoint.aqi}`
+                ];
+              }
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            grid: {
+              color: 'rgba(156, 163, 175, 0.2)',
+              drawBorder: false
+            },
+            ticks: {
+              color: '#6B7280',
+              font: {
+                size: 11
+              }
+            },
+            title: {
+              display: true,
+              text: 'PM2.5 (μg/m³)',
+              color: '#374151',
+              font: {
+                size: 12,
+                weight: '500'
+              }
+            }
+          },
+          x: {
+            grid: {
+              display: false
+            },
+            ticks: {
+              color: '#6B7280',
+              font: {
+                size: 11
+              },
+              maxRotation: 0
+            },
+            title: {
+              display: true,
+              text: 'Time (GMT+7)',
+              color: '#374151',
+              font: {
+                size: 12,
+                weight: '500'
+              }
+            }
+          }
+        },
+        interaction: {
+          intersect: false,
+          mode: 'index'
+        },
+        animation: {
+          duration: 750,
+          easing: 'easeInOutQuart'
+        }
       }
     });
   }
@@ -217,17 +345,22 @@
   <div style="background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 1.5rem;">
     <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Historical Data</h2>
     <div style="margin-bottom: 1rem;">
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('24h')}>24h</button>
-      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('7d')}>7d</button>
-      <button style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('30d')}>30d</button>
+      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('realtime')}>Live</button>
+      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('5min')}>5min</button>
+      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('30min')}>30min</button>
+      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('1h')}>1h</button>
+      <button style="margin-right: 0.5rem; padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('4h')}>4h</button>
+      <button style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.25rem; cursor: pointer;" on:click={() => loadHistory('24h')}>24h</button>
     </div>
     {#if loadingHistory}
       <p>Loading history...</p>
     {:else if errorHistory}
       <p style="color: red;">Error: {errorHistory}</p>
     {:else}
-      <!-- Always render the canvas so bind:this is available; show message when no data -->
-      <canvas bind:this={chartCanvas} id="chart" width="800" height="300" style="display: {historyData.length>0 ? 'block' : 'none'}"></canvas>
+      <!-- Chart container with modern styling -->
+      <div style="position: relative; height: 400px; width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 12px; padding: 1rem; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05); display: {historyData.length>0 ? 'block' : 'none'};">
+        <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
+      </div>
       {#if historyData.length === 0}
         <p>No historical data available.</p>
       {/if}
