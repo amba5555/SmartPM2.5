@@ -99,7 +99,7 @@ class MQTTPinger {
       const deviceId = payload.device_id;
       const timestamp = payload.timestamp;
 
-      console.log(`📨 Message from ${deviceId}: PM2.5=${payload.pm25}, AQI=${payload.aqi}`);
+      console.log(`📨 Message from ${deviceId}: PM2.5=${payload.readings?.pm25 || 'N/A'}, AQI=${payload.aqi?.value || 'N/A'}`);
 
       // Check if we should ping (debounce per device)
       if (this.shouldPing(deviceId)) {
