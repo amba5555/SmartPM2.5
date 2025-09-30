@@ -84,9 +84,7 @@ def on_message(client, userdata, msg):
         delay = 0.5
         for attempt in range(1, max_attempts + 1):
             try:
-                # Use upsert to avoid creating duplicate rows when the same
-                # device_id+timestamp arrives multiple times (idempotent)
-                resp = supabase.table("readings").upsert(payload).execute()
+                resp = supabase.table("readings").insert(payload).execute()
                 # Supabase client may include error info in resp.error or resp.get('error')
                 # Log and break on success
                 logger.info(f"Supabase insert response: {getattr(resp, 'data', resp)}")
@@ -174,10 +172,11 @@ async def get_latest_reading():
         return {"error": f"Database query failed: {str(e)}"}
 
 @app.get("/api/readings/history")
-async def get_history(period: str = "24h"):
+async def get_readings_history(period: str = "24h"):
+    """Get historical readings for a time period"""
     try:
-        # Calculate time range
-        now = int(datetime.now().timestamp() * 1000)  # Convert to int milliseconds
+        # Convert period to timestamp range
+        now = int(time.time() * 1000)  # Current timestamp in milliseconds
         if period == "7d":
             start_time = now - (7 * 24 * 60 * 60 * 1000)
         elif period == "30d":
@@ -189,6 +188,26 @@ async def get_history(period: str = "24h"):
         return {"data": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
+
+@app.get("/api/internal/wake")
+async def wake_endpoint(request: Request):
+    """
+    Lightweight wake endpoint for MQTT pinger.
+    Returns quickly without DB access to minimize response time.
+    """
+    # Optional: Check for wake token in headers
+    wake_token = os.getenv("WAKE_TOKEN")
+    if wake_token:
+        provided_token = request.headers.get("X-Wake-Token")
+        if provided_token != wake_token:
+            raise HTTPException(status_code=401, detail="Invalid wake token")
+    
+    return {
+        "status": "awake",
+        "timestamp": int(time.time() * 1000),
+        "mqtt_connected": mqtt_connected,
+        "last_received": last_received
+    }
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,0 +1,27 @@
+{
+  "name": "smartpm25-mqtt-pinger",
+  "version": "1.0.0",
+  "description": "MQTT subscriber that pings Render backend to keep it awake when sensor data arrives",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.3.4",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mqtt",
+    "hivemq",
+    "render",
+    "keep-alive",
+    "iot"
+  ],
+  "author": "",
+  "license": "MIT"
+}
