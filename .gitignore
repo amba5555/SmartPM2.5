@@ -10,3 +10,8 @@ src/mqtt_config.cpp
 
 # Keep example files
 !include/MQTTConfig.example.h
+
+# Web-specific ignores
+web/backend/venv/
+web/frontend/node_modules/
+.env
