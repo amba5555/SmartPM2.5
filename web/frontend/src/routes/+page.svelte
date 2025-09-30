@@ -59,7 +59,8 @@
         if (didChange) {
           latestReading = data;
           // If user is viewing a non-realtime period, refresh that historical view so new spikes show up
-          if (currentPeriod !== 'realtime') {
+          // BUT don't reload if we're in Live mode since realtime subscription handles updates
+          if (currentPeriod !== 'Live' && currentPeriod !== 'realtime') {
             // Prevent triggering on initial load (prevLatestId null)
             if (prevLatestId !== null && data.id !== prevLatestId) {
               // fire-and-wait so chart updates shortly after latestReading updates
@@ -102,6 +103,13 @@
       realtimeSubscription = null;
     }
     
+    // Force chart recreation when switching modes
+    if (chart) {
+      console.log('Destroying chart for mode switch');
+      chart.destroy();
+      chart = null;
+    }
+    
     let endpoint;
     
     if (period === 'Live') {
@@ -124,7 +132,8 @@
         errorHistory = null;
         if (liveDataBuffer.length > 0) {
           await tick();
-          updateChart();
+          // Small delay to ensure canvas is ready
+          setTimeout(() => updateChart(), 100);
         }
       } catch (err) {
         console.error('Error loading live data:', err);
@@ -195,7 +204,7 @@
           event: 'INSERT',
           schema: 'public',
           table: 'readings',
-          filter: 'device_id=neq.INTEGRATION_TEST_001'
+          filter: `device_id=eq.ESP32_PM25_001`
         },
         (payload) => {
           console.log('New reading received:', payload.new);
@@ -209,8 +218,8 @@
               liveDataBuffer = liveDataBuffer.slice(-60);
             }
             
-            // Update historyData and chart
-            historyData = { data: [...liveDataBuffer] };
+            // Update historyData and chart - force Svelte reactivity
+            historyData = { ...historyData, data: [...liveDataBuffer] };
             updateChart();
             
             // Update latest reading if this is the newest
@@ -220,8 +229,11 @@
           }
         }
       )
-      .subscribe((status) => {
+      .subscribe((status, err) => {
         console.log('Realtime subscription status:', status);
+        if (err) {
+          console.error('Realtime subscription error:', err);
+        }
       });
   }
 
@@ -258,10 +270,14 @@
         }
       }, 30000); // Poll every 30 seconds for aggregated views
     } else {
-      // In live mode, still poll for latest reading updates (hero card)
+      // In live mode, poll more frequently as fallback for realtime
       pollingInterval = setInterval(async () => {
         await loadLatestReading();
-      }, 10000); // Poll every 10 seconds in live mode
+        // Also refresh live data periodically
+        if (currentPeriod === 'Live') {
+          await loadHistory('Live');
+        }
+      }, 10000); // Poll every 10 seconds in live mode as fallback
     }
   }
 
@@ -317,8 +333,6 @@
       return;
     }
 
-    if (chart) chart.destroy();
-
     // Get data array from historyData
     const dataArray = isLiveMode ? liveDataBuffer : (historyData.data || []);
     
@@ -340,6 +354,33 @@
                       historyData.aggregated ? `PM2.5 (${currentPeriod} - ${historyData.bucket_interval} averages)` :
                       `PM2.5 (${currentPeriod})`;
 
+        // For live mode, try to update existing chart smoothly instead of recreating
+    // Only do this if we have a valid chart and we're staying in live mode
+    if (chart && isLiveMode && chartData.length > 0 && currentPeriod === 'Live') {
+      const newLabels = chartData.map(d => d.time);
+      const newData = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25);
+      const newColors = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg);
+      const newBorderColors = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border);
+      
+      // Update chart data smoothly
+      chart.data.labels = newLabels;
+      chart.data.datasets[0].data = newData;
+      chart.data.datasets[0].backgroundColor = newColors;
+      chart.data.datasets[0].borderColor = newBorderColors;
+      
+      // Use short animation for live updates
+      chart.update('active');
+      return;
+    }
+
+    // Always destroy and recreate chart for mode switches or initial setup
+    if (chart) {
+      console.log('Destroying existing chart');
+      chart.destroy();
+      chart = null;
+    }
+
+    console.log('Creating new chart with', chartData.length, 'data points');
     chart = new Chart(ctx, {
       type: 'bar',
       data: {
@@ -447,7 +488,7 @@
           mode: 'index'
         },
         animation: {
-          duration: isLiveMode ? 200 : 750, // Faster animation for live updates
+          duration: isLiveMode ? 300 : 500, // Smoother live updates
           easing: 'easeInOutQuart'
         }
       }
@@ -507,13 +548,13 @@
   }
 </script>
 
-<main style="max-width: min(100vw, 1200px); width: 100%; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
+<main style="width: 100%; min-height: 100vh; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
   
   <!-- Responsive container that adapts to screen size -->
-  <div style="width: 100%; max-width: min(900px, 100vw); margin: 0 auto;">
+  <div style="width: 100%; max-width: 1200px; margin: 0 auto;">
     <!-- Header -->
     <div style="text-align: center; margin-bottom: 2rem;">
-      <h1 style="font-size: clamp(1.25rem, 4vw, 1.75rem); font-weight: 600; color: #333; margin: 0;">📍 Smart PM2.5 Monitor</h1>
+      <h1 style="font-size: clamp(1.5rem, 5vw, 2.5rem); font-weight: 600; color: #333; margin: 0;">📍 Smart PM2.5 Monitor</h1>
       {#if latestReading}
         <p style="font-size: 0.875rem; color: #666; margin: 0.5rem 0 0 0;">Last updated: {formatLastUpdated(latestReading.created_at)}</p>
       {/if}
@@ -544,20 +585,19 @@
     </div>
   {:else if latestReading}
     <div 
-      style="background: {getAQIBackgroundColor(latestReading.aqi)}; border-radius: 1rem; padding: 2rem; margin-bottom: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative; overflow: hidden;"
-      in:fly={{ y: 20, duration: 300 }} out:fade={{ duration: 200 }}
+      style="background: {getAQIBackgroundColor(latestReading.aqi)}; border-radius: 1rem; padding: 2rem; margin-bottom: 1rem; box-shadow: 0 4px 20px rgba(0,0,0,0.15); position: relative; overflow: hidden; transition: background-color 0.3s ease;"
     >
       <!-- Subtle gradient overlay -->
       <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(0,0,0,0.05) 100%);"></div>
       
       <!-- Content -->
       <div style="position: relative; z-index: 2;">
-        <!-- AQI and Status Row -->
+        <!-- PM2.5 and Status Row -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-          <!-- AQI Box -->
+          <!-- PM2.5 Value Box (main focus) -->
           <div style="background: rgba(0,0,0,0.15); padding: 0.75rem 1rem; border-radius: 0.75rem; backdrop-filter: blur(10px);">
-            <div style="font-size: clamp(1.5rem, 5vw, 2rem); font-weight: bold; color: white; margin: 0;">{latestReading.aqi}</div>
-            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">US AQI</div>
+            <div style="font-size: clamp(2rem, 6vw, 3rem); font-weight: bold; color: white; margin: 0;">{latestReading.pm25}</div>
+            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">μg/m³ PM2.5</div>
           </div>
           
           <!-- Status and Face -->
@@ -567,34 +607,16 @@
           </div>
         </div>
 
-        <!-- PM2.5 Info -->
+        <!-- AQI Info at bottom -->
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div style="color: rgba(255,255,255,0.95); font-size: 1rem; font-weight: 500;">Main pollutant: PM2.5</div>
-          <div style="color: white; font-size: 1.125rem; font-weight: 600;">{latestReading.pm25} μg/m³</div>
+          <div style="color: rgba(255,255,255,0.95); font-size: 1rem; font-weight: 500;">Air Quality Index</div>
+          <div style="color: white; font-size: 1.125rem; font-weight: 600;">{latestReading.aqi} AQI</div>
         </div>
       </div>
     </div>
   {:else}
     <div style="background: #f0f0f0; border-radius: 1rem; padding: 2rem; text-align: center; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
       <div style="font-size: 1.125rem; color: #666;">No data available</div>
-    </div>
-  {/if}
-
-  <!-- Additional Reading Info -->
-  {#if latestReading}
-    <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 1rem; text-align: center;">
-      <div>
-        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.pm10}</div>
-        <div style="font-size: 0.75rem; color: #666;">PM10 μg/m³</div>
-      </div>
-      <div>
-        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.pm1}</div>
-        <div style="font-size: 0.75rem; color: #666;">PM1 μg/m³</div>
-      </div>
-      <div>
-        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.wifi_rssi} dBm</div>
-        <div style="font-size: 0.75rem; color: #666;">WiFi Signal</div>
-      </div>
     </div>
   {/if}
 
@@ -629,11 +651,13 @@
         <div style="font-size: 1rem;">Error: {errorHistory}</div>
       </div>
     {:else if (isLiveMode && liveDataBuffer.length > 0) || (!isLiveMode && historyData.data && historyData.data.length > 0)}
-      <div style="position: relative; height: 300px; width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 0.75rem; padding: 1rem; box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);">
+      <div style="position: relative; height: clamp(350px, 50vh, 600px); width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin: 1rem 0;">
         {#if isLiveMode}
+                  {#if isLiveMode}
           <div style="position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(34, 197, 94, 0.1); color: #16a34a; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 500;">
             🔴 LIVE
           </div>
+        {/if}
         {/if}
         <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
       </div>
