@@ -68,6 +68,37 @@ def on_message(client, userdata, msg):
         global last_received
         last_received = data
         logger.info(f"Received: {data}")
+        # Ignore integration test messages that may be published during CI or local tests.
+        # This prevents test data (INTEGRATION_TEST_001) from showing up in the production API.
+        device_id = data.get("device_id")
+        if device_id == "INTEGRATION_TEST_001":
+            logger.info("Ignoring integration test message from INTEGRATION_TEST_001")
+            return
+        # Normalize timestamp: some devices publish seconds instead of milliseconds
+        raw_ts = None
+        try:
+            raw_ts = data.get("metadata", {}).get("timestamp")
+        except Exception:
+            raw_ts = None
+
+        now_ms = int(time.time() * 1000)
+        ts = None
+        try:
+            if raw_ts is None:
+                ts = now_ms
+            else:
+                # Accept either int or string numeric
+                ts_val = int(raw_ts)
+                # If the value looks like seconds (10 digits or less), convert to ms
+                if ts_val < 1_000_000_000_000:
+                    ts = ts_val * 1000
+                else:
+                    ts = ts_val
+        except Exception:
+            ts = now_ms
+
+        logger.info(f"Normalized timestamp for insert: {ts} (raw: {raw_ts})")
+
         # Insert into Supabase with retries
         payload = {
             "device_id": data["device_id"],
@@ -75,7 +106,7 @@ def on_message(client, userdata, msg):
             "pm25": data["readings"]["pm25"],
             "pm10": data["readings"]["pm10"],
             "aqi": data["aqi"]["value"],
-            "timestamp": data["metadata"]["timestamp"],
+            "timestamp": ts,
             "wifi_rssi": data["metadata"]["wifi_rssi"],
             "ip_address": data["metadata"]["ip"]
         }
@@ -169,7 +200,7 @@ async def get_latest_reading():
             filtered = supabase.table("readings")
             # Exclude the known integration test device id. If you have more test ids,
             # expand this check or add a dedicated 'is_test' column.
-            filtered_resp = filtered.select("*").neq("device_id", "INTEGRATION_TEST_001").order("timestamp", desc=True).limit(1).execute()
+            filtered_resp = filtered.select("*").neq("device_id", "INTEGRATION_TEST_001").order("created_at", desc=True).limit(1).execute()
             if getattr(filtered_resp, 'data', None):
                 return filtered_resp.data[0]
         except Exception:
@@ -177,7 +208,7 @@ async def get_latest_reading():
             pass
 
         # Fallback: return the most recent row regardless (covers cases where only test data exists).
-        response = supabase.table("readings").select("*").order("timestamp", desc=True).limit(1).execute()
+        response = supabase.table("readings").select("*").order("created_at", desc=True).limit(1).execute()
         if response.data:
             return response.data[0]
         else:
@@ -198,7 +229,7 @@ async def get_readings_history(period: str = "24h"):
         else:  # 24h
             start_time = now - (24 * 60 * 60 * 1000)
 
-        response = supabase.table("readings").select("*").gte("timestamp", start_time).order("timestamp").execute()
+        response = supabase.table("readings").select("*").gte("timestamp", start_time).order("created_at").execute()
         return {"data": response.data, "count": len(response.data)}
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
