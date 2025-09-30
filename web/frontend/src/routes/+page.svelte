@@ -12,6 +12,7 @@
 
   let latestReading = null;
   let historyData = [];
+  let prevLatestId = null;
   let chart;
   let chartCanvas = null;
   let _chartCanvasAttempts = 0;
@@ -44,8 +45,22 @@
         console.log('Data received:', data);
         
         // Smooth transition: only update if data actually changed
-        if (!prevReading || data.id !== prevReading.id || data.pm25 !== prevReading.pm25 || data.aqi !== prevReading.aqi) {
+        const didChange = !prevReading || data.id !== prevReading.id || data.pm25 !== prevReading.pm25 || data.aqi !== prevReading.aqi;
+        if (didChange) {
           latestReading = data;
+          // If user is viewing a non-realtime period, refresh that historical view so new spikes show up
+          if (currentPeriod !== 'realtime') {
+            // Prevent triggering on initial load (prevLatestId null)
+            if (prevLatestId !== null && data.id !== prevLatestId) {
+              // fire-and-wait so chart updates shortly after latestReading updates
+              try {
+                await loadHistory(currentPeriod);
+              } catch (e) {
+                console.warn('Refreshing history after latest reading change failed:', e);
+              }
+            }
+          }
+          prevLatestId = data.id;
         }
         errorLatest = null;
         break;
@@ -129,8 +144,9 @@
 
   function setupPolling() {
     setInterval(async () => {
+      // Load latest first; loadLatestReading will trigger history refresh for non-realtime when needed
       await loadLatestReading();
-      // Auto-refresh historical data if on real-time view
+      // Auto-refresh historical data if on real-time view (keep real-time rolling)
       if (currentPeriod === 'realtime') {
         await loadHistory('realtime');
       }
@@ -191,13 +207,28 @@
 
     if (chart) chart.destroy();
 
-    // Prepare data with AQI-based colors
-    const chartData = historyData.map(d => ({
-      pm25: d.pm25,
-      aqi: d.aqi,
-      time: formatTimeGMT7(d.created_at),
-      color: getAQIChartColor(d.aqi)
-    }));
+    // If backend returned pre-aggregated buckets, use them to ensure equal-width time bins
+    let chartData;
+    if (historyData && historyData.buckets) {
+      chartData = historyData.buckets.map(b => {
+        const aqi = b.aqi;
+        const pm25 = b.pm25;
+        const timeLabel = (() => {
+          // Label use bucket end time for readability
+          try { return formatTimeGMT7(b.end); } catch (e) { return '' }
+        })();
+        const color = aqi != null ? getAQIChartColor(aqi) : { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.2)' };
+        return { pm25, aqi, time: timeLabel, color };
+      });
+    } else {
+      // fallback to raw rows
+      chartData = historyData.map(d => ({
+        pm25: d.pm25,
+        aqi: d.aqi,
+        time: formatTimeGMT7(d.created_at),
+        color: getAQIChartColor(d.aqi)
+      }));
+    }
 
     chart = new Chart(ctx, {
       type: 'bar',
@@ -205,9 +236,9 @@
         labels: chartData.map(d => d.time),
         datasets: [{
           label: 'PM2.5 (μg/m³)',
-          data: chartData.map(d => d.pm25),
-          backgroundColor: chartData.map(d => d.color.bg),
-          borderColor: chartData.map(d => d.color.border),
+          data: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25),
+          backgroundColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg),
+          borderColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border),
           borderWidth: 1,
           borderRadius: 4,
           borderSkipped: false,
@@ -229,19 +260,34 @@
             }
           },
           tooltip: {
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            backgroundColor: 'rgba(0, 0, 0, 0.85)',
             titleColor: '#fff',
             bodyColor: '#fff',
             borderColor: '#374151',
             borderWidth: 1,
             cornerRadius: 8,
             callbacks: {
+              title: function(items) {
+                // items[0].label is already the time (bucket end). Keep it concise.
+                return items && items.length ? items[0].label : '';
+              },
               label: function(context) {
-                const dataPoint = chartData[context.dataIndex];
-                return [
-                  `PM2.5: ${dataPoint.pm25} μg/m³`,
-                  `AQI: ${dataPoint.aqi}`
-                ];
+                const dataPoint = chartData[context.dataIndex] || {};
+                const parts = [];
+                if (dataPoint.pm25 !== null && dataPoint.pm25 !== undefined) parts.push(`PM2.5: ${dataPoint.pm25} μg/m³`);
+                if (dataPoint.aqi !== null && dataPoint.aqi !== undefined) parts.push(`AQI: ${dataPoint.aqi}`);
+                // If backend provided bucket meta via historyData.buckets, include count and range
+                if (historyData && historyData.buckets && historyData.buckets[context.dataIndex]) {
+                  const b = historyData.buckets[context.dataIndex];
+                  parts.push(`samples: ${b.count}`);
+                  // show human-readable range
+                  try {
+                    const start = new Date(b.start).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Bangkok' });
+                    const end = new Date(b.end).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Bangkok' });
+                    parts.push(`${start} — ${end}`);
+                  } catch (e) { /* ignore */ }
+                }
+                return parts;
               }
             }
           }
@@ -343,12 +389,13 @@
   }
 </script>
 
-<main style="max-width: min(100vw, 1200px); width: 100%; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa; display: flex; flex-direction: column; align-items: center;">
+<main style="max-width: min(100vw, 1200px); width: 100%; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
   
-  <div style="width: 100%; max-width: min(400px, 100vw); margin: 0 auto;">
+  <!-- Responsive container that adapts to screen size -->
+  <div style="width: 100%; max-width: min(900px, 100vw); margin: 0 auto;">
     <!-- Header -->
     <div style="text-align: center; margin-bottom: 2rem;">
-      <h1 style="font-size: 1.5rem; font-weight: 600; color: #333; margin: 0;">Smart PM2.5 Monitor</h1>
+      <h1 style="font-size: clamp(1.25rem, 4vw, 1.75rem); font-weight: 600; color: #333; margin: 0;">📍 Smart PM2.5 Monitor</h1>
       {#if latestReading}
         <p style="font-size: 0.875rem; color: #666; margin: 0.5rem 0 0 0;">Last updated: {formatLastUpdated(latestReading.created_at)}</p>
       {/if}
@@ -391,13 +438,13 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
           <!-- AQI Box -->
           <div style="background: rgba(0,0,0,0.15); padding: 0.75rem 1rem; border-radius: 0.75rem; backdrop-filter: blur(10px);">
-            <div style="font-size: 1.75rem; font-weight: bold; color: white; margin: 0;">{latestReading.aqi}</div>
+            <div style="font-size: clamp(1.5rem, 5vw, 2rem); font-weight: bold; color: white; margin: 0;">{latestReading.aqi}</div>
             <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">US AQI</div>
           </div>
           
           <!-- Status and Face -->
           <div style="text-align: right;">
-            <div style="font-size: 1.5rem; font-weight: 600; color: white; margin-bottom: 0.25rem;">{getHealthMessage(latestReading.aqi)}</div>
+            <div style="font-size: clamp(1.25rem, 4vw, 1.5rem); font-weight: 600; color: white; margin-bottom: 0.25rem;">{getHealthMessage(latestReading.aqi)}</div>
             <div style="font-size: 2rem; margin: 0;">{getFaceEmoji(latestReading.aqi)}</div>
           </div>
         </div>

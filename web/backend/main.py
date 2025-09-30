@@ -234,37 +234,130 @@ async def get_latest_batch(limit: int = 50):
         return {"error": f"Database query failed: {str(e)}"}
 
 @app.get("/api/readings/history")
-async def get_readings_history(period: str = "1h"):
+async def get_readings_history(period: str = "1h", agg: str = "avg", buckets: int = None):
     """Get historical readings for different time periods with appropriate aggregation"""
     try:
         from datetime import datetime, timedelta
         
-        # Get current time and calculate start time based on period
-        now = datetime.utcnow()
+        # Use the database's latest created_at as the authoritative 'now' to avoid container clock skew.
+        # Fallback to server UTC time if the DB query fails.
+        now = None
+        try:
+            latest_resp = supabase.table("readings").select("created_at").order("created_at", desc=True).limit(1).execute()
+            if getattr(latest_resp, 'data', None) and len(latest_resp.data) > 0:
+                latest_created = latest_resp.data[0].get('created_at')
+                if latest_created:
+                    # Parse ISO timestamp returned by Supabase (includes timezone offset)
+                    try:
+                        # fromisoformat supports offsets like +00:00
+                        now = datetime.fromisoformat(latest_created)
+                    except Exception:
+                        # As a last resort, fallback to utcnow
+                        now = datetime.utcnow()
+        except Exception as e:
+            # If anything goes wrong with the DB lookup, fall back to utcnow
+            now = None
+
+        if now is None:
+            now = datetime.utcnow()
         
         # Define time ranges and limits - calculate from current time going backwards
         time_configs = {
-            "5min": {"duration": timedelta(minutes=5), "limit": 60},  # 5 minutes back
-            "30min": {"duration": timedelta(minutes=30), "limit": 60},  # 30 minutes back  
-            "1h": {"duration": timedelta(hours=1), "limit": 60},  # 1 hour back
-            "4h": {"duration": timedelta(hours=4), "limit": 48},  # 4 hours back
-            "24h": {"duration": timedelta(hours=24), "limit": 48},  # 24 hours back
+            "5min": {"duration": timedelta(minutes=5), "limit": 100},  # 5 minutes back, more samples
+            "30min": {"duration": timedelta(minutes=30), "limit": 150},  # 30 minutes back  
+            "1h": {"duration": timedelta(hours=1), "limit": 200},  # 1 hour back
+            "4h": {"duration": timedelta(hours=4), "limit": 200},  # 4 hours back
+            "24h": {"duration": timedelta(hours=24), "limit": 200},  # 24 hours back
         }
         
         config = time_configs.get(period, time_configs["1h"])
         start_time = now - config["duration"]
         
-        # Query data from start_time to now, ordered by created_at DESC (newest first)
+        # Query raw data from start_time to now, ordered by created_at DESC (newest first)
+        # Using created_at timestamps for proper time filtering
         response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
-            start_time.isoformat()).lte("created_at", now.isoformat()).order("created_at", desc=True).limit(config["limit"]).execute()
-        
-        # Reverse to get chronological order (oldest to newest) for charts
-        if response.data:
-            response.data.reverse()
-        
-        return {"data": response.data, "count": len(response.data), "period": period}
-    except Exception as e:
-        return {"error": f"Database query failed: {str(e)}"}
+            start_time.isoformat() + "Z").lte("created_at", now.isoformat() + "Z").order("created_at", desc=True).limit(config["limit"]).execute()
+
+        raw_rows = response.data or []
+        # Reverse to chronological order (oldest -> newest)
+        raw_rows = list(reversed(raw_rows))
+
+        # Create regular time buckets spanning [start_time, now]. Use per-period bucket counts
+        # so time bin sizes feel sensible for short vs long ranges.
+        per_period_buckets = {
+            "5min": 60,   # ~5s bins
+            "30min": 60,  # ~30s bins
+            "1h": 60,     # ~1min bins
+            "4h": 120,    # ~2min bins
+            "24h": 144    # ~10min bins
+        }
+        desired_buckets = buckets if (buckets and buckets > 0) else per_period_buckets.get(period, 60)
+
+        # total_seconds is the requested duration length in seconds
+        total_seconds = config["duration"].total_seconds()
+        # bucket_size in seconds (minimum 1 second)
+        bucket_size = max(1, total_seconds / desired_buckets)
+
+        # Build bucket boundaries
+        buckets = []
+        from datetime import timedelta
+        for i in range(desired_buckets):
+            b_start = start_time + timedelta(seconds=bucket_size * i)
+            b_end = start_time + timedelta(seconds=bucket_size * (i + 1))
+            buckets.append({"start": b_start, "end": b_end, "rows": []})
+
+        # Assign rows to buckets
+        for r in raw_rows:
+            try:
+                created = r.get('created_at')
+                if not created:
+                    continue
+                created_dt = datetime.fromisoformat(created)
+            except Exception:
+                # skip unparsable timestamps
+                continue
+            # If row is out of bounds, skip
+            if created_dt < start_time or created_dt > now:
+                continue
+            # compute index
+            idx = int((created_dt - start_time).total_seconds() // bucket_size)
+            if idx < 0:
+                idx = 0
+            if idx >= len(buckets):
+                idx = len(buckets) - 1
+            buckets[idx]["rows"].append(r)
+
+        # Aggregate each bucket using the requested aggregation method
+        from statistics import median
+        agg_buckets = []
+        for b in buckets:
+            rows = b["rows"]
+            if rows:
+                pm25_vals = [float(rr.get('pm25') or 0) for rr in rows]
+                if agg == 'max':
+                    agg_pm25 = max(pm25_vals)
+                elif agg == 'median':
+                    agg_pm25 = median(pm25_vals)
+                else:
+                    # default to average
+                    agg_pm25 = sum(pm25_vals) / len(pm25_vals)
+
+                # choose latest row's aqi (rows are chronological)
+                latest_aqi = rows[-1].get('aqi')
+                count = len(rows)
+            else:
+                agg_pm25 = None
+                latest_aqi = None
+                count = 0
+            agg_buckets.append({
+                "start": b["start"].isoformat(),
+                "end": b["end"].isoformat(),
+                "pm25": (round(agg_pm25, 2) if agg_pm25 is not None else None),
+                "aqi": latest_aqi,
+                "count": count
+            })
+
+        return {"data": raw_rows, "count": len(raw_rows), "period": period, "start_time": start_time.isoformat(), "end_time": now.isoformat(), "buckets": agg_buckets}
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
 
