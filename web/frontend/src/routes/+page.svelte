@@ -5,17 +5,14 @@
   // This page doesn't use route params; export a const to silence the Svelte plugin warning
   export const params = undefined;
   import Chart from 'chart.js/auto';
-  import { createClient } from '@supabase/supabase-js';
+  import getSupabaseClient from '$lib/supabaseClient';
 
   const BACKEND_BASE = new URL(import.meta.env.VITE_BACKEND_URL || 'https://smartpm2-5.onrender.com');
   const MAX_RETRIES = 6;
   const RETRY_BASE_MS = 500; // ms
   
   // Supabase client for realtime subscriptions
-  const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL || '',
-    import.meta.env.VITE_SUPABASE_ANON_KEY || ''
-  );
+  const supabase = getSupabaseClient();
 
   let latestReading = null;
   let historyData = [];

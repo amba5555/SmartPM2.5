@@ -1,0 +1,12 @@
+# Frontend specific ignores
+.DS_Store
+node_modules/
+/build/
+/.svelte-kit/
+
+# Vercel
+.vercel
+
+# Local env files (inherit from root .env instead)
+.env*
+!.env.example

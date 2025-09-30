@@ -11,12 +11,41 @@ src/mqtt_config.cpp
 # Keep example files
 !include/MQTTConfig.example.h
 
+# Environment files (contains secrets) - ignore all variants
+.env
+.env.local
+.env.production
+.env.development
+*/.env
+*/.env.local
+*/.env.production
+*/.env.development
+
 # Web-specific ignores
 web/backend/venv/
 web/frontend/node_modules/
-.env
 
 # Frontend build & cache (generated) - do not commit
 web/frontend/.svelte-kit/
 web/frontend/build/
-web/frontend/.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg

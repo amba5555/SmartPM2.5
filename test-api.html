@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>API Connectivity Test</h1>
+    <div id="results"></div>
+    
+    <script>
+        async function testAPI() {
+            const results = document.getElementById('results');
+            const backendUrl = 'https://smartpm2-5.onrender.com';
+            
+            // Test 1: Latest reading
+            try {
+                results.innerHTML += '<p>Testing /api/readings/latest...</p>';
+                const response = await fetch(`${backendUrl}/api/readings/latest`);
+                if (response.ok) {
+                    const data = await response.json();
+                    results.innerHTML += `<p>✅ Latest reading: PM2.5 = ${data.pm25}</p>`;
+                } else {
+                    results.innerHTML += `<p>❌ Latest reading failed: ${response.status}</p>`;
+                }
+            } catch (error) {
+                results.innerHTML += `<p>❌ Latest reading error: ${error.message}</p>`;
+            }
+            
+            // Test 2: Aggregated reading
+            try {
+                results.innerHTML += '<p>Testing /api/v1/readings/aggregated...</p>';
+                const response = await fetch(`${backendUrl}/api/v1/readings/aggregated?timeframe=1h`);
+                if (response.ok) {
+                    const data = await response.json();
+                    results.innerHTML += `<p>✅ Aggregated data: ${data.count} points</p>`;
+                } else {
+                    results.innerHTML += `<p>❌ Aggregated data failed: ${response.status}</p>`;
+                }
+            } catch (error) {
+                results.innerHTML += `<p>❌ Aggregated data error: ${error.message}</p>`;
+            }
+        }
+        
+        testAPI();
+    </script>
+</body>
+</html>
