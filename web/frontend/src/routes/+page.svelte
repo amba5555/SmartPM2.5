@@ -28,12 +28,27 @@
   let realtimeSubscription = null;
   let liveDataBuffer = [];
   let isLiveMode = false;
+  let isMobileView = false;
   
   // Polling interval for non-live modes
   let pollingInterval = null;
 
   onMount(async () => {
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
+    console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
+    console.log('Supabase key available:', !!import.meta.env.VITE_SUPABASE_ANON_KEY);
+    
+    // Check initial screen size and listen for changes
+    isMobileView = window.innerWidth <= 768;
+    window.addEventListener('resize', () => {
+      const mobile = window.innerWidth <= 768;
+      if (mobile !== isMobileView) {
+        isMobileView = mobile;
+        // Re-render chart on resize to adjust aggregation
+        if (chart) updateChart();
+      }
+    });
+
     await loadLatestReading();
     await loadHistory('Live'); // Default to Live view
     setupPolling();
@@ -74,7 +89,7 @@
           prevLatestId = data.id;
         }
         errorLatest = null;
-        break;
+        break; // Exit retry loop on success
       } catch (err) {
         attempt += 1;
         console.warn(`loadLatestReading attempt ${attempt} failed:`, err.message || err);
@@ -316,6 +331,7 @@
 
   function updateChart() {
     if (!chartCanvas) {
+      console.log('Chart canvas not ready, retrying...');
       // Retry a few times in case bind:this hasn't fired yet
       if (_chartCanvasAttempts < 10) {
         _chartCanvasAttempts += 1;
@@ -334,11 +350,37 @@
     }
 
     // Get data array from historyData
-    const dataArray = isLiveMode ? liveDataBuffer : (historyData.data || []);
+    let dataArray = isLiveMode ? liveDataBuffer : (historyData.data || []);
+    
+    console.log('Updating chart - isLiveMode:', isLiveMode, 'data length:', dataArray.length);
     
     if (!dataArray || dataArray.length === 0) {
-      console.warn('No data available for chart');
-      return;
+        if (chart) {
+            // Clear chart if no data, preventing errors
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
+            chart.update('none'); // No animation for clearing
+        }
+        return;
+    }
+
+    // Mobile aggregation for live mode to improve readability
+    if (isLiveMode && isMobileView && dataArray.length > 20) {
+        const aggregated = [];
+        const groupSize = Math.ceil(dataArray.length / 20); // Aim for ~20 bars
+        for (let i = 0; i < dataArray.length; i += groupSize) {
+            const group = dataArray.slice(i, i + groupSize);
+            const avgPm25 = group.reduce((sum, d) => sum + d.pm25, 0) / group.length;
+            const avgAqi = Math.round(avgPm25 * 4);
+            aggregated.push({
+                ...group[group.length - 1], // Use last item for timestamp
+                pm25: avgPm25,
+                aqi: avgAqi,
+                aggregated: true,
+                groupSize: group.length
+            });
+        }
+        dataArray = aggregated;
     }
 
     // Prepare data with AQI-based colors
@@ -347,16 +389,17 @@
       aqi: d.aqi,
       time: formatTimeGMT7(d.created_at),
       color: getAQIChartColor(d.aqi),
-      aggregated: d.aggregated || false
+      aggregated: d.aggregated || false,
+      groupSize: d.groupSize
     }));
 
-    const chartTitle = isLiveMode ? 'PM2.5 (Live - Last 5 minutes)' : 
-                      historyData.aggregated ? `PM2.5 (${currentPeriod} - ${historyData.bucket_interval} averages)` :
+    const chartTitle = isLiveMode ? (isMobileView ? 'PM2.5 (Live - Aggregated)' : 'PM2.5 (Live - Last 5 mins)') : 
+                      historyData.aggregated ? `PM2.5 (${currentPeriod} - ${historyData.bucket_interval} avg)` :
                       `PM2.5 (${currentPeriod})`;
 
-        // For live mode, try to update existing chart smoothly instead of recreating
-    // Only do this if we have a valid chart and we're staying in live mode
-    if (chart && isLiveMode && chartData.length > 0 && currentPeriod === 'Live') {
+    // For live mode or data-only updates, update existing chart smoothly
+    if (chart && (isLiveMode || chart.data.datasets[0].label === chartTitle)) {
+      console.log('Updating existing chart with', chartData.length, 'points');
       const newLabels = chartData.map(d => d.time);
       const newData = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25);
       const newColors = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg);
@@ -367,15 +410,16 @@
       chart.data.datasets[0].data = newData;
       chart.data.datasets[0].backgroundColor = newColors;
       chart.data.datasets[0].borderColor = newBorderColors;
+      chart.data.datasets[0].label = chartTitle; // Update title in case it changes
       
-      // Use short animation for live updates
-      chart.update('active');
+      console.log('Chart data updated, calling chart.update()');
+      chart.update(isLiveMode ? 'active' : 'default'); // Use 'active' for subtle live animation
       return;
     }
 
     // Always destroy and recreate chart for mode switches or initial setup
     if (chart) {
-      console.log('Destroying existing chart');
+      console.log('Destroying existing chart for recreation');
       chart.destroy();
       chart = null;
     }
@@ -432,6 +476,9 @@
                 }
                 if (dataPoint.aggregated) {
                   parts.push('(aggregated)');
+                }
+                if (dataPoint.groupSize > 1) {
+                  parts.push(`(avg of ${dataPoint.groupSize})`);
                 }
                 return parts;
               }
@@ -548,6 +595,15 @@
   }
 </script>
 
+<svelte:head>
+  <style>
+    /* Apply border-box sizing to all elements for consistent layout */
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+  </style>
+</svelte:head>
+
 <main style="width: 100%; min-height: 100vh; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
   
   <!-- Responsive container that adapts to screen size -->
@@ -641,31 +697,35 @@
       {/each}
     </div>
 
-    <!-- Chart Section -->
-    {#if loadingHistory}
-      <div style="text-align: center; padding: 2rem; color: #666;">
-        <div style="font-size: 1rem;">Loading history...</div>
-      </div>
-    {:else if errorHistory}
-      <div style="text-align: center; padding: 2rem; color: #d32f2f;">
-        <div style="font-size: 1rem;">Error: {errorHistory}</div>
-      </div>
-    {:else if (isLiveMode && liveDataBuffer.length > 0) || (!isLiveMode && historyData.data && historyData.data.length > 0)}
-      <div style="position: relative; height: clamp(350px, 50vh, 600px); width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin: 1rem 0;">
+    <!-- Chart Section Wrapper -->
+    <div style="margin-top: 1rem;">
+      <!-- Inner container for styling (padding, background, shadow) -->
+      <div style="position: relative; height: clamp(350px, 50vh, 600px); width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
         {#if isLiveMode}
-                  {#if isLiveMode}
           <div style="position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(34, 197, 94, 0.1); color: #16a34a; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 500;">
             🔴 LIVE
           </div>
         {/if}
-        {/if}
-        <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
+        
+        <!-- Chart Canvas Wrapper -->
+        <div style="position: relative; width: 100%; height: 100%;">
+          {#if loadingHistory}
+            <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; background: rgba(248, 250, 252, 0.8); border-radius: 0.5rem; z-index: 10; transition: opacity 0.2s;" in:fade={{duration: 150}} out:fade={{duration: 150}}>
+              <div style="font-size: 1rem; color: #666;">Loading history...</div>
+            </div>
+          {:else if errorHistory}
+            <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; background: rgba(254, 235, 235, 0.8); border-radius: 0.5rem; z-index: 10;">
+              <div style="font-size: 1rem; color: #d32f2f;">Error: {errorHistory}</div>
+            </div>
+          {:else if !((isLiveMode && liveDataBuffer.length > 0) || (!isLiveMode && historyData.data && historyData.data.length > 0))}
+            <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; z-index: 10">
+              <div style="font-size: 1rem; color: #666;">No historical data available</div>
+            </div>
+          {/if}
+          <canvas bind:this={chartCanvas} id="chart" style="width: 100%; height: 100%;"></canvas>
+        </div>
       </div>
-    {:else}
-      <div style="text-align: center; padding: 2rem; color: #666;">
-        <div style="font-size: 1rem;">No historical data available</div>
-      </div>
-    {/if}
+    </div>
   </div>
   </div>
 </main>
