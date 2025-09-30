@@ -10,3 +10,22 @@ node_modules/
 # Local env files (inherit from root .env instead)
 .env*
 !.env.example
+!.env.production
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/

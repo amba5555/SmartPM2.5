@@ -122,6 +122,36 @@ If live mode doesn't update:
 - Frontend console shows data fetch timing
 - Chart rendering optimized per mode
 
+## UI/UX Improvements Checklist
+
+### Chart Enhancements ✅
+- [x] **Live Mode Real-time Updates**: Implemented Supabase realtime subscriptions for instant data updates
+- [x] **Smooth Chart Animations**: Added optimized animations for live data updates (800ms duration, easeInOutCubic)
+- [x] **Mobile Responsive Charts**: Automatic data aggregation on mobile for better readability (>20 points → ~20 bars)
+- [x] **Stable Layout**: Fixed chart container sizing to prevent page "bumping" during updates
+- [x] **Global Box-sizing**: Applied `box-sizing: border-box` to fix mobile padding issues
+
+### Data Management ✅
+- [x] **Polling Optimization**: 5-second polling for live mode, 30-second for aggregated views
+- [x] **Lightweight Live Updates**: Separate `refreshLiveData()` function to avoid chart recreation
+- [x] **Train-like Scrolling**: Implemented shift-and-push pattern for smooth data flow visualization
+- [x] **Memory Management**: Rolling buffer of 60 data points for live mode
+
+### Performance Optimizations ✅
+- [x] **Chart Update Strategy**: Smart chart recreation only on timeframe switches, smooth updates for live data
+- [x] **Realtime Subscription Management**: Proper cleanup and recreation of Supabase subscriptions
+- [x] **Error Handling**: Robust error handling for network issues and failed updates
+
+### Known Issues 🔧
+- [ ] **Layout Shift**: Chart container still causes minor page bumping (padding-top trick needs refinement)
+- [ ] **Line Chart**: Removed due to visual issues - may revisit with different approach
+
+### Future Enhancements 📋
+- [ ] **Advanced Animations**: Explore Chart.js animation callbacks for smoother transitions
+- [ ] **Layout Stability**: Investigate CSS containment or transform-based solutions
+- [ ] **Trend Visualization**: Alternative to line chart overlay (gradient fills, sparklines)
+- [ ] **Touch Interactions**: Enhanced mobile chart interactions and gestures
+
 ## Testing
 
 Test all timeframe modes:
