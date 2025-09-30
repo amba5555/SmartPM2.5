@@ -1,19 +1,20 @@
 # Implementation Checklist: Hyperlocal Air Quality Platform (Phase 1 MVP)
 
-**Version:** 1.1
-**Date:** September 30, 2025
+**Version:** 1.2
+**Date:** September 30, 2025 (Updated)
 **Based on PRD:** Hyperlocal Air Quality & Health Forecast Platform
 **Goal:** Build end-to-end data pipeline and dashboard for real-time AQI monitoring.
 **Timeline:** 4–6 weeks (10–15 hours/week).
 **Tools:** VS Code, GitHub, Supabase, Render, Vercel.
+**Current Status:** Core MVP pipeline working, frontend deployment troubleshooting in progress.
 
 ---
 
 ## Prerequisites
-- [ ] ESP32 firmware deployed and publishing to HiveMQ Cloud (see firmware topic note below).
-- [ ] GitHub repository for source control.
-- [ ] Accounts created: Supabase (free), Render (free), Vercel (free), HiveMQ Cloud (free).
-- [ ] Basic knowledge: Python (backend), JavaScript (frontend), SQL (database).
+- [x] ESP32 firmware deployed and publishing to HiveMQ Cloud (see firmware topic note below). ✅ **WORKING RELIABLY**
+- [x] GitHub repository for source control. ✅ **COMPLETE**
+- [x] Accounts created: Supabase (free), Render (free), Vercel (free), HiveMQ Cloud (free). ✅ **COMPLETE**
+- [x] Basic knowledge: Python (backend), JavaScript (frontend), SQL (database). ✅ **APPLIED**
 
 Note: The backend implementation in this repo expects the device to publish to the dotted-topic form `smartpm25.sensor.data` (not `smartpm25/sensor/data`). The backend also requires TLS on MQTT (port 8883).
 - [ ] GitHub repository for source control.
@@ -25,9 +26,10 @@ Note: The backend implementation in this repo expects the device to publish to t
 ## 1. Database Setup (Supabase)
 **Goal:** Create secure, scalable storage for sensor data.
 **Estimated time:** 1–2 days.
+**STATUS:** ✅ **COMPLETE AND WORKING**
 
-- [ ] Create a new Supabase project.
-- [ ] In the SQL editor, run the schema script (or use the provided `web/backend/sql/schema.sql`). Example schema:
+- [x] Create a new Supabase project.
+- [x] In the SQL editor, run the schema script (or use the provided `web/backend/sql/schema.sql`). Example schema:
 
 ```sql
 CREATE TABLE readings (
@@ -46,9 +48,9 @@ CREATE INDEX readings_device_id_idx ON readings(device_id);
 CREATE INDEX readings_timestamp_idx ON readings(timestamp);
 ```
 
-- [ ] Enable Row Level Security (RLS) and add policies for read access (or use Supabase Edge Functions for controlled access).
-- [ ] Insert sample data to validate the schema.
-- [ ] Record: Project URL, anon (public) key, and service role key (store securely).
+- [x] Enable Row Level Security (RLS) and add policies for read access (or use Supabase Edge Functions for controlled access).
+- [x] Insert sample data to validate the schema.
+- [x] Record: Project URL, anon (public) key, and service role key (store securely).
 
 Success criteria: table exists and sample data is insertable/queryable.
 
@@ -60,6 +62,12 @@ Important note about uniqueness and idempotency
 ## 2. Backend Setup (Python + FastAPI on Render)
 **Goal:** Subscribe to MQTT, validate/process incoming messages, store them in Supabase, and expose APIs for the frontend.
 **Estimated time:** 2–4 days (backend skeleton exists in `web/backend`).
+**STATUS:** ✅ **COMPLETE AND WORKING RELIABLY**
+
+**Additional Infrastructure:**
+- [x] Railway cron job implemented for Render wake-up pings ✅ **WORKING**
+- [x] Database-side aggregation functions implemented for efficient time-series queries
+- [x] MQTT→Supabase pipeline stable and reliable
 
 Key implemented decisions (this repo):
 - Python runtime: 3.11 (run tests and venv with python3.11). Many dependencies in the Supabase stack require 3.11 compatibility.
@@ -104,6 +112,7 @@ Success criteria: backend receives MQTT messages (TLS) and writes to Supabase; A
 ## 3. Frontend Setup (Svelte + SvelteKit on Vercel)
 **Goal:** Responsive dashboard showing live AQI, recent readings, and historical charts.  
 **Estimated time:** 4–6 days.
+**STATUS:** 🔄 **LOCAL: COMPLETE, VERCEL: DEPLOYMENT ISSUES**
 
 - [ ] Scaffold SvelteKit app:
 
@@ -144,7 +153,9 @@ npm install @supabase/supabase-js chart.js
   - [x] Responsive design for mobile/desktop
 
 - [x] Test locally (`npm run dev`) and verify layout on desktop and mobile.
-- [ ] Deploy to Vercel (connect GitHub repo, set env vars for production if needed).
+- [x] Deploy to Vercel (connect GitHub repo, set env vars for production if needed). 🔄 **DEPLOYED BUT ASSET ROUTING ISSUES**
+
+**Current Vercel Issue:** Static assets (JS/CSS) return HTML content instead of proper files, causing MIME type errors in browser. Investigation shows filesystem routing in vercel.json needs refinement.
 
 **Success criteria:** Dashboard displays live data and historical charts, updates within 10s.  
 **Notes / Risks:** If Svelte becomes a blocker, implement a minimal static page with plain JS and Chart.js and migrate later.
@@ -154,13 +165,13 @@ npm install @supabase/supabase-js chart.js
 ## 4. Integration & Testing
 **Goal:** Validate end-to-end pipeline and user experience.  
 **Estimated time:** 2–3 days.
+**STATUS:** ✅ **CORE PIPELINE COMPLETE** 🔄 **FRONTEND DEPLOYMENT PENDING**
 
-
-- [ ] Point device(s) to HiveMQ Cloud and confirm messages appear in backend logs (backend requires TLS and uses `smartpm25.sensor.data`).
-- [ ] Verify records appear in Supabase and that upserts prevent duplicates from duplicate deliveries.
-- [ ] Confirm frontend shows latest reading and history charts.
-- [ ] Validate AQI calculations and health messages.
-- [ ] Test multi-device flows and filters.
+- [x] Point device(s) to HiveMQ Cloud and confirm messages appear in backend logs (backend requires TLS and uses `smartpm25.sensor.data`). ✅ **WORKING RELIABLY**
+- [x] Verify records appear in Supabase and that upserts prevent duplicates from duplicate deliveries. ✅ **VERIFIED**
+- [x] Confirm frontend shows latest reading and history charts. ✅ **LOCAL WORKING**
+- [x] Validate AQI calculations and health messages. ✅ **VERIFIED**
+- [x] Test multi-device flows and filters. ✅ **WORKING**
 - [ ] Run integration tests:
 
 ```bash
@@ -173,6 +184,12 @@ pytest -q
 Success criteria: full pipeline validated; tests pass and system is stable with expected message rates.
 
 **Success criteria:** Full pipeline validated; visible on staging/production URLs.
+**Current Status:** ✅ Pipeline validated locally and in staging. 🔄 Production frontend deployment troubleshooting in progress (asset routing issue).
+
+**Immediate Next Steps:**
+- [ ] Resolve Vercel static asset MIME type issue
+- [ ] Verify production frontend fully functional
+- [ ] Complete end-to-end production validation
 
 ---
 
