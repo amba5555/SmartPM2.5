@@ -44,6 +44,10 @@ log_path = os.getenv("BACKEND_LOG_PATH", "./backend.log")
 handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3)
 handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 logger.addHandler(handler)
+# Also log to stdout so PaaS (Render) captures logs reliably
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logger.addHandler(stream_handler)
 import uuid
 
 # Use an explicit client id to avoid collisions and make debugging easier
