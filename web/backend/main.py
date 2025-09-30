@@ -188,8 +188,8 @@ async def debug_mqtt(request: Request):
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "mqtt_connected": mqtt_connected}
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(), "version": "2.1"}
 
 @app.get("/api/readings/latest")
 async def get_latest_reading():
