@@ -84,7 +84,9 @@ def on_message(client, userdata, msg):
         delay = 0.5
         for attempt in range(1, max_attempts + 1):
             try:
-                resp = supabase.table("readings").insert(payload).execute()
+                # Use upsert to avoid creating duplicate rows when the same
+                # device_id+timestamp arrives multiple times (idempotent)
+                resp = supabase.table("readings").upsert(payload).execute()
                 # Supabase client may include error info in resp.error or resp.get('error')
                 # Log and break on success
                 logger.info(f"Supabase insert response: {getattr(resp, 'data', resp)}")
