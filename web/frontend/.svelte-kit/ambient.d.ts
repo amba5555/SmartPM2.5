@@ -26,6 +26,9 @@
  * ```
  */
 declare module '$env/static/private' {
+	export const VITE_BACKEND_URL: string;
+	export const VITE_SUPABASE_URL: string;
+	export const VITE_SUPABASE_ANON_KEY: string;
 	export const NVM_INC: string;
 	export const TERM_PROGRAM: string;
 	export const NODE: string;
@@ -36,7 +39,9 @@ declare module '$env/static/private' {
 	export const HOMEBREW_REPOSITORY: string;
 	export const TMPDIR: string;
 	export const npm_config_global_prefix: string;
+	export const VSCODE_PYTHON_AUTOACTIVATE_GUARD: string;
 	export const TERM_PROGRAM_VERSION: string;
+	export const ZDOTDIR: string;
 	export const ORIGINAL_XDG_CURRENT_DESKTOP: string;
 	export const MallocNanoZone: string;
 	export const COLOR: string;
@@ -59,10 +64,10 @@ declare module '$env/static/private' {
 	export const _: string;
 	export const npm_config_userconfig: string;
 	export const npm_config_init_module: string;
+	export const USER_ZDOTDIR: string;
 	export const __CFBundleIdentifier: string;
 	export const npm_command: string;
 	export const PWD: string;
-	export const VSCODE_NONCE: string;
 	export const npm_lifecycle_event: string;
 	export const EDITOR: string;
 	export const npm_package_name: string;
@@ -75,6 +80,7 @@ declare module '$env/static/private' {
 	export const npm_config_node_gyp: string;
 	export const npm_package_version: string;
 	export const XPC_SERVICE_NAME: string;
+	export const VSCODE_INJECTION: string;
 	export const VSCODE_DEBUGPY_ADAPTER_ENDPOINTS: string;
 	export const SHLVL: string;
 	export const HOME: string;
@@ -127,6 +133,9 @@ declare module '$env/static/public' {
  */
 declare module '$env/dynamic/private' {
 	export const env: {
+		VITE_BACKEND_URL: string;
+		VITE_SUPABASE_URL: string;
+		VITE_SUPABASE_ANON_KEY: string;
 		NVM_INC: string;
 		TERM_PROGRAM: string;
 		NODE: string;
@@ -137,7 +146,9 @@ declare module '$env/dynamic/private' {
 		HOMEBREW_REPOSITORY: string;
 		TMPDIR: string;
 		npm_config_global_prefix: string;
+		VSCODE_PYTHON_AUTOACTIVATE_GUARD: string;
 		TERM_PROGRAM_VERSION: string;
+		ZDOTDIR: string;
 		ORIGINAL_XDG_CURRENT_DESKTOP: string;
 		MallocNanoZone: string;
 		COLOR: string;
@@ -160,10 +171,10 @@ declare module '$env/dynamic/private' {
 		_: string;
 		npm_config_userconfig: string;
 		npm_config_init_module: string;
+		USER_ZDOTDIR: string;
 		__CFBundleIdentifier: string;
 		npm_command: string;
 		PWD: string;
-		VSCODE_NONCE: string;
 		npm_lifecycle_event: string;
 		EDITOR: string;
 		npm_package_name: string;
@@ -176,6 +187,7 @@ declare module '$env/dynamic/private' {
 		npm_config_node_gyp: string;
 		npm_package_version: string;
 		XPC_SERVICE_NAME: string;
+		VSCODE_INJECTION: string;
 		VSCODE_DEBUGPY_ADAPTER_ENDPOINTS: string;
 		SHLVL: string;
 		HOME: string;

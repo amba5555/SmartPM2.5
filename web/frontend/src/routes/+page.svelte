@@ -33,6 +33,21 @@
   // Polling interval for non-live modes
   let pollingInterval = null;
 
+  // Helper to manage the live data buffer and ensure "train" effect
+  function pushToLiveData(newDataPoint) {
+    if (!newDataPoint || typeof newDataPoint.id === 'undefined') return;
+
+    // Avoid duplicates
+    if (liveDataBuffer.some(p => p.id === newDataPoint.id)) return;
+
+    liveDataBuffer.push(newDataPoint);
+    while (liveDataBuffer.length > 60) {
+      liveDataBuffer.shift(); // Remove the oldest point
+    }
+    // Sort just in case of out-of-order delivery
+    liveDataBuffer.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  }
+
   onMount(async () => {
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
     console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
@@ -106,7 +121,29 @@
     loadingLatest = false;
   }
 
+  async function refreshLiveData() {
+    console.log('Refreshing live data batch...');
+    const endpoint = new URL(`/api/readings/latest-batch?limit=60`, BACKEND_BASE).toString();
+    try {
+      const response = await fetch(endpoint, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const payload = await response.json();
+      const rows = Array.isArray(payload) ? payload : (payload.data || []);
+      
+      // Only update if there's new data to prevent unnecessary re-renders
+      if (rows.length > 0 && (!liveDataBuffer.length || rows[rows.length - 1].id !== liveDataBuffer[liveDataBuffer.length - 1].id)) {
+        liveDataBuffer = rows.slice(-60);
+        historyData = { data: liveDataBuffer };
+        // Do a full chart update after a batch refresh
+        updateChart(false);
+      }
+    } catch (err) {
+      console.warn('Failed to refresh live data batch:', err);
+    }
+  }
+
   async function loadHistory(period = 'Live') {
+    console.log(`Switching history to period: ${period}`);
     currentPeriod = period;
     loadingHistory = true;
     errorHistory = null;
@@ -129,35 +166,58 @@
     
     if (period === 'Live') {
       // Live mode: Get last 5 minutes of raw data + setup realtime subscription
-      endpoint = new URL(`/api/readings/latest-batch?limit=60`, BACKEND_BASE).toString(); // ~5 minutes at 5s intervals
+      loadingHistory = true;
+      errorHistory = null;
       
+      // Clean up and destroy chart before setting up live mode
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+      if (realtimeSubscription) {
+        await supabase.removeChannel(realtimeSubscription);
+        realtimeSubscription = null;
+      }
+
+      const endpoint = new URL(`/api/readings/latest-batch?limit=60`, BACKEND_BASE).toString();
       try {
         const response = await fetch(endpoint, { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         const payload = await response.json();
         const rows = Array.isArray(payload) ? payload : (payload.data || []);
         
-        // Store in live buffer and update chart
-        liveDataBuffer = rows.slice(-60); // Keep last 60 points
+        liveDataBuffer = rows.slice(-60);
         historyData = { data: liveDataBuffer };
         
-        // Setup realtime subscription
         setupRealtimeSubscription();
         
-        errorHistory = null;
         if (liveDataBuffer.length > 0) {
           await tick();
-          // Small delay to ensure canvas is ready
           setTimeout(() => updateChart(), 100);
         }
       } catch (err) {
-        console.error('Error loading live data:', err);
+        console.error('Error loading initial live data:', err);
         errorHistory = err.message || String(err);
         historyData = [];
+      } finally {
+        loadingHistory = false;
       }
     } else {
       // Aggregated modes: Use new aggregated endpoint
-      endpoint = new URL(`/api/v1/readings/aggregated?timeframe=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
+      loadingHistory = true;
+      errorHistory = null;
+      
+      // Clean up live mode artifacts
+      if (realtimeSubscription) {
+        await supabase.removeChannel(realtimeSubscription);
+        realtimeSubscription = null;
+      }
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+
+      const endpoint = new URL(`/api/v1/readings/aggregated?timeframe=${encodeURIComponent(period)}`, BACKEND_BASE).toString();
       
       console.log('Loading aggregated history from:', endpoint);
       let attempt = 0;
@@ -225,17 +285,10 @@
           console.log('New reading received:', payload.new);
           
           if (isLiveMode && payload.new) {
-            // Add new reading to live buffer
-            liveDataBuffer.push(payload.new);
+            pushToLiveData(payload.new);
             
-            // Keep only last 60 readings (5 minutes at 5s intervals)
-            if (liveDataBuffer.length > 60) {
-              liveDataBuffer = liveDataBuffer.slice(-60);
-            }
-            
-            // Update historyData and chart - force Svelte reactivity
-            historyData = { ...historyData, data: [...liveDataBuffer] };
-            updateChart();
+            // Trigger a live "scrolling" update
+            updateChart(true);
             
             // Update latest reading if this is the newest
             if (!latestReading || payload.new.id > latestReading.id) {
@@ -287,12 +340,13 @@
     } else {
       // In live mode, poll more frequently as fallback for realtime
       pollingInterval = setInterval(async () => {
+        console.log('Polling for latest reading in live mode...');
         await loadLatestReading();
-        // Also refresh live data periodically
+        // Use the lightweight refresh function instead of reloading everything
         if (currentPeriod === 'Live') {
-          await loadHistory('Live');
+          await refreshLiveData();
         }
-      }, 10000); // Poll every 10 seconds in live mode as fallback
+      }, 5000); // Poll every 5 seconds in live mode
     }
   }
 
@@ -329,7 +383,7 @@
     });
   }
 
-  function updateChart() {
+  function updateChart(isLiveUpdate = false) {
     if (!chartCanvas) {
       console.log('Chart canvas not ready, retrying...');
       // Retry a few times in case bind:this hasn't fired yet
@@ -364,13 +418,13 @@
         return;
     }
 
-    // Mobile aggregation for live mode to improve readability
-    if (isLiveMode && isMobileView && dataArray.length > 20) {
+    // Mobile aggregation for all modes to improve readability
+    if (isMobileView && dataArray.length > 20) {
         const aggregated = [];
         const groupSize = Math.ceil(dataArray.length / 20); // Aim for ~20 bars
         for (let i = 0; i < dataArray.length; i += groupSize) {
             const group = dataArray.slice(i, i + groupSize);
-            const avgPm25 = group.reduce((sum, d) => sum + d.pm25, 0) / group.length;
+            const avgPm25 = group.reduce((sum, d) => sum + (d.pm25 || 0), 0) / group.length;
             const avgAqi = Math.round(avgPm25 * 4);
             aggregated.push({
                 ...group[group.length - 1], // Use last item for timestamp
@@ -397,29 +451,29 @@
                       historyData.aggregated ? `PM2.5 (${currentPeriod} - ${historyData.bucket_interval} avg)` :
                       `PM2.5 (${currentPeriod})`;
 
-    // For live mode or data-only updates, update existing chart smoothly
-    if (chart && (isLiveMode || chart.data.datasets[0].label === chartTitle)) {
-      console.log('Updating existing chart with', chartData.length, 'points');
-      const newLabels = chartData.map(d => d.time);
-      const newData = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25);
-      const newColors = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg);
-      const newBorderColors = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border);
+    // For live mode, smoothly update the chart without recreating it
+    if (chart && isLiveMode) {
+      console.log('Updating existing live chart with', chartData.length, 'points');
+      chart.data.labels = chartData.map(d => d.time);
       
-      // Update chart data smoothly
-      chart.data.labels = newLabels;
-      chart.data.datasets[0].data = newData;
-      chart.data.datasets[0].backgroundColor = newColors;
-      chart.data.datasets[0].borderColor = newBorderColors;
-      chart.data.datasets[0].label = chartTitle; // Update title in case it changes
+      // Update bar dataset
+      chart.data.datasets[0].data = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25);
+      chart.data.datasets[0].backgroundColor = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg);
+      chart.data.datasets[0].borderColor = chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border);
+
+      chart.data.datasets[0].label = chartTitle;
       
-      console.log('Chart data updated, calling chart.update()');
-      chart.update(isLiveMode ? 'active' : 'default'); // Use 'active' for subtle live animation
+      // Use a specific animation config for live updates to get the "train" effect
+      chart.update({
+        duration: 800,
+        easing: 'easeInOutCubic'
+      });
       return;
     }
 
-    // Always destroy and recreate chart for mode switches or initial setup
+    // If chart exists but we are switching TO an aggregated view, destroy and recreate
     if (chart) {
-      console.log('Destroying existing chart for recreation');
+      console.log('Destroying existing chart for recreation (mode switch)');
       chart.destroy();
       chart = null;
     }
@@ -429,15 +483,17 @@
       type: 'bar',
       data: {
         labels: chartData.map(d => d.time),
-        datasets: [{
-          label: chartTitle,
-          data: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25),
-          backgroundColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg),
-          borderColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border),
-          borderWidth: 1,
-          borderRadius: 4,
-          borderSkipped: false,
-        }]
+        datasets: [
+          {
+            label: chartTitle,
+            data: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 0 : d.pm25),
+            backgroundColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.08)' : d.color.bg),
+            borderColor: chartData.map(d => d.pm25 === null || d.pm25 === undefined ? 'rgba(148,163,184,0.12)' : d.color.border),
+            borderWidth: 1,
+            borderRadius: 4,
+            borderSkipped: false
+          }
+        ]
       },
       options: {
         responsive: true,
@@ -535,8 +591,15 @@
           mode: 'index'
         },
         animation: {
-          duration: isLiveMode ? 300 : 500, // Smoother live updates
+          duration: isLiveMode ? 400 : 500, // Slightly longer for live
           easing: 'easeInOutQuart'
+        },
+        transitions: {
+          'active': {
+            animation: {
+              duration: 400 // Smooth animation for live data points
+            }
+          }
         }
       }
     });
@@ -699,16 +762,16 @@
 
     <!-- Chart Section Wrapper -->
     <div style="margin-top: 1rem;">
-      <!-- Inner container for styling (padding, background, shadow) -->
-      <div style="position: relative; height: clamp(350px, 50vh, 600px); width: 100%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 1rem; padding: 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+      <!-- Stable container using padding-top trick for 16:9 aspect ratio -->
+      <div style="position: relative; width: 100%; height: 0; padding-top: 56.25%; background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-radius: 1rem; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
         {#if isLiveMode}
-          <div style="position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(34, 197, 94, 0.1); color: #16a34a; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 500;">
+          <div style="position: absolute; top: 0.5rem; right: 0.5rem; background: rgba(34, 197, 94, 0.1); color: #16a34a; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 500; z-index: 5;">
             🔴 LIVE
           </div>
         {/if}
         
         <!-- Chart Canvas Wrapper -->
-        <div style="position: relative; width: 100%; height: 100%;">
+        <div style="position: absolute; top: 1.5rem; left: 1.5rem; right: 1.5rem; bottom: 1.5rem;">
           {#if loadingHistory}
             <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; align-items: center; background: rgba(248, 250, 252, 0.8); border-radius: 0.5rem; z-index: 10; transition: opacity 0.2s;" in:fade={{duration: 150}} out:fade={{duration: 150}}>
               <div style="font-size: 1rem; color: #666;">Loading history...</div>
