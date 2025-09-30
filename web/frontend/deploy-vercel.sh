@@ -24,7 +24,9 @@ echo "   Output: build"
 echo ""
 
 read -p "🔍 Deploy to production? (y/N) " yn
-if [[ "${yn,,}" != "y" ]]; then
+# Convert to lowercase in a cross-shell compatible way
+yn=$(echo "$yn" | tr '[:upper:]' '[:lower:]')
+if [[ "$yn" != "y" ]]; then
   echo "❌ Deployment cancelled."
   exit 1
 fi
