@@ -44,8 +44,7 @@
         console.log('Data received:', data);
         
         // Smooth transition: only update if data actually changed
-        if (!prevReading || data.id !== prevReading.id) {
-          await tick(); // Ensure DOM is ready
+        if (!prevReading || data.id !== prevReading.id || data.pm25 !== prevReading.pm25 || data.aqi !== prevReading.aqi) {
           latestReading = data;
         }
         errorLatest = null;
@@ -150,10 +149,22 @@
   // Convert UTC timestamp to local time (GMT+7)
   function formatTimeGMT7(utcTimestamp) {
     const date = new Date(utcTimestamp);
-    // No need to add hours - created_at should already be in server timezone
     return date.toLocaleTimeString('en-US', { 
       hour: '2-digit', 
       minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Bangkok'
+    });
+  }
+
+  // Format last updated time
+  function formatLastUpdated(utcTimestamp) {
+    const date = new Date(utcTimestamp);
+    return date.toLocaleString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit', 
+      second: '2-digit',
       hour12: false,
       timeZone: 'Asia/Bangkok'
     });
@@ -332,13 +343,16 @@
   }
 </script>
 
-<main style="max-width: 400px; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa;">
+<main style="max-width: min(100vw, 1200px); width: 100%; margin: 0 auto; padding: 1rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8f9fa; display: flex; flex-direction: column; align-items: center;">
   
-  <!-- Header -->
-  <div style="text-align: center; margin-bottom: 2rem;">
-    <h1 style="font-size: 1.5rem; font-weight: 600; color: #333; margin: 0;">📍 Bueng Bun</h1>
-    <p style="font-size: 0.875rem; color: #666; margin: 0.5rem 0 0 0;">1.4K followers • {new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })}</p>
-  </div>
+  <div style="width: 100%; max-width: min(400px, 100vw); margin: 0 auto;">
+    <!-- Header -->
+    <div style="text-align: center; margin-bottom: 2rem;">
+      <h1 style="font-size: 1.5rem; font-weight: 600; color: #333; margin: 0;">Smart PM2.5 Monitor</h1>
+      {#if latestReading}
+        <p style="font-size: 0.875rem; color: #666; margin: 0.5rem 0 0 0;">Last updated: {formatLastUpdated(latestReading.created_at)}</p>
+      {/if}
+    </div>
 
   <!-- Main Hero Card -->
   {#if loadingLatest}
@@ -377,8 +391,8 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
           <!-- AQI Box -->
           <div style="background: rgba(0,0,0,0.15); padding: 0.75rem 1rem; border-radius: 0.75rem; backdrop-filter: blur(10px);">
-            <div style="font-size: 1.75rem; font-weight: bold; color: white; margin: 0;">{latestReading.aqi}<span style="font-size: 0.75rem; font-weight: normal;">*</span></div>
-            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">US AQI*</div>
+            <div style="font-size: 1.75rem; font-weight: bold; color: white; margin: 0;">{latestReading.aqi}</div>
+            <div style="font-size: 0.75rem; color: rgba(255,255,255,0.9); margin: 0;">US AQI</div>
           </div>
           
           <!-- Status and Face -->
@@ -401,35 +415,28 @@
     </div>
   {/if}
 
-  <!-- Weather Info Row (Static for now) -->
-  <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: flex; justify-content: space-around; align-items: center;">
-    <div style="text-align: center;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">🌫️</div>
-      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">30°</div>
+  <!-- Additional Reading Info -->
+  {#if latestReading}
+    <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 1rem; text-align: center;">
+      <div>
+        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.pm10}</div>
+        <div style="font-size: 0.75rem; color: #666;">PM10 μg/m³</div>
+      </div>
+      <div>
+        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.pm1}</div>
+        <div style="font-size: 0.75rem; color: #666;">PM1 μg/m³</div>
+      </div>
+      <div>
+        <div style="font-size: 1.125rem; font-weight: 600; color: #333;">{latestReading.wifi_rssi} dBm</div>
+        <div style="font-size: 0.75rem; color: #666;">WiFi Signal</div>
+      </div>
     </div>
-    <div style="text-align: center;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">💨</div>
-      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">13.3 km/h</div>
-    </div>
-    <div style="text-align: center;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem;">💧</div>
-      <div style="font-size: 1.125rem; font-weight: 600; color: #333;">76%</div>
-    </div>
-  </div>
-
-  <!-- Data Source -->
-  <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1.5rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: flex; justify-content: space-between; align-items: center;">
-    <div>
-      <div style="font-size: 0.875rem; color: #666; margin-bottom: 0.25rem;">Data provided by</div>
-      <div style="font-size: 0.875rem; font-weight: 600; color: #333;">* AQI modeled using sensor data</div>
-    </div>
-    <div style="color: #ccc;">›</div>
-  </div>
+  {/if}
 
   <!-- Time Period Buttons -->
   <div style="background: white; border-radius: 1rem; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08);">
     <h3 style="font-size: 1.125rem; font-weight: 600; color: #333; margin: 0 0 1rem 0;">Historical Data</h3>
-    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;">
       {#each [
         { label: 'Live', value: 'realtime' },
         { label: '5min', value: '5min' },
@@ -439,7 +446,7 @@
         { label: '24h', value: '24h' }
       ] as period}
         <button 
-          style="padding: 0.5rem 1rem; background: {currentPeriod === period.value ? getAQIBackgroundColor(latestReading?.aqi || 50) : '#f1f5f9'}; color: {currentPeriod === period.value ? 'white' : '#64748b'}; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 500; font-size: 0.875rem; transition: all 0.2s ease;"
+          style="padding: 0.5rem 0.75rem; background: {currentPeriod === period.value ? getAQIBackgroundColor(latestReading?.aqi || 50) : '#f1f5f9'}; color: {currentPeriod === period.value ? 'white' : '#64748b'}; border: none; border-radius: 0.5rem; cursor: pointer; font-weight: 500; font-size: 0.875rem; transition: all 0.2s ease;"
           on:click={() => loadHistory(period.value)}
         >
           {period.label}
@@ -465,5 +472,6 @@
         <div style="font-size: 1rem;">No historical data available</div>
       </div>
     {/if}
+  </div>
   </div>
 </main>

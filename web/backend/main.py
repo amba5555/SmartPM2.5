@@ -237,35 +237,34 @@ async def get_latest_batch(limit: int = 50):
 async def get_readings_history(period: str = "1h"):
     """Get historical readings for different time periods with appropriate aggregation"""
     try:
-        now = int(time.time() * 1000)  # Current timestamp in milliseconds
+        from datetime import datetime, timedelta
         
-        # Define time ranges and limits
+        # Get current time and calculate start time based on period
+        now = datetime.utcnow()
+        
+        # Define time ranges and limits - calculate from current time going backwards
         time_configs = {
-            "5min": {"duration": 5 * 60 * 1000, "limit": 60},  # 5 minutes, every 5s = ~60 points
-            "30min": {"duration": 30 * 60 * 1000, "limit": 60},  # 30 minutes, every 30s = ~60 points  
-            "1h": {"duration": 60 * 60 * 1000, "limit": 60},  # 1 hour, every 1min = ~60 points
-            "4h": {"duration": 4 * 60 * 60 * 1000, "limit": 48},  # 4 hours, every 5min = ~48 points
-            "24h": {"duration": 24 * 60 * 60 * 1000, "limit": 48},  # 24 hours, every 30min = ~48 points
+            "5min": {"duration": timedelta(minutes=5), "limit": 60},  # 5 minutes back
+            "30min": {"duration": timedelta(minutes=30), "limit": 60},  # 30 minutes back  
+            "1h": {"duration": timedelta(hours=1), "limit": 60},  # 1 hour back
+            "4h": {"duration": timedelta(hours=4), "limit": 48},  # 4 hours back
+            "24h": {"duration": timedelta(hours=24), "limit": 48},  # 24 hours back
         }
         
         config = time_configs.get(period, time_configs["1h"])
         start_time = now - config["duration"]
         
-        # For short periods (5min, 30min), get more recent data points
-        if period in ["5min", "30min"]:
-            response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
-                datetime.fromtimestamp(start_time/1000).isoformat()).order("created_at").limit(config["limit"]).execute()
-        else:
-            # For longer periods, we might want to implement server-side aggregation later
-            response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
-                datetime.fromtimestamp(start_time/1000).isoformat()).order("created_at").execute()
-            
-            # Simple client-side sampling for now - take every Nth point
-            if len(response.data) > config["limit"]:
-                step = len(response.data) // config["limit"]
-                response.data = response.data[::step][:config["limit"]]
+        # Query data from start_time to now, ordered by created_at DESC (newest first)
+        response = supabase.table("readings").select("*").neq("device_id", "INTEGRATION_TEST_001").gte("created_at", 
+            start_time.isoformat()).lte("created_at", now.isoformat()).order("created_at", desc=True).limit(config["limit"]).execute()
+        
+        # Reverse to get chronological order (oldest to newest) for charts
+        if response.data:
+            response.data.reverse()
         
         return {"data": response.data, "count": len(response.data), "period": period}
+    except Exception as e:
+        return {"error": f"Database query failed: {str(e)}"}
     except Exception as e:
         return {"error": f"Database query failed: {str(e)}"}
 
