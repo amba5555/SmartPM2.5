@@ -1,16 +1,21 @@
 # Implementation Checklist: Hyperlocal Air Quality Platform (Phase 1 MVP)
 
-**Version:** 1.0  
-**Date:** September 30, 2025  
-**Based on PRD:** Hyperlocal Air Quality & Health Forecast Platform  
-**Goal:** Build end-to-end data pipeline and dashboard for real-time AQI monitoring.  
-**Timeline:** 4–6 weeks (10–15 hours/week).  
+**Version:** 1.1
+**Date:** September 30, 2025
+**Based on PRD:** Hyperlocal Air Quality & Health Forecast Platform
+**Goal:** Build end-to-end data pipeline and dashboard for real-time AQI monitoring.
+**Timeline:** 4–6 weeks (10–15 hours/week).
 **Tools:** VS Code, GitHub, Supabase, Render, Vercel.
 
 ---
 
 ## Prerequisites
-- [ ] ESP32 firmware deployed and publishing to HiveMQ (`smartpm25/sensor/data`).
+- [ ] ESP32 firmware deployed and publishing to HiveMQ Cloud (see firmware topic note below).
+- [ ] GitHub repository for source control.
+- [ ] Accounts created: Supabase (free), Render (free), Vercel (free), HiveMQ Cloud (free).
+- [ ] Basic knowledge: Python (backend), JavaScript (frontend), SQL (database).
+
+Note: The backend implementation in this repo expects the device to publish to the dotted-topic form `smartpm25.sensor.data` (not `smartpm25/sensor/data`). The backend also requires TLS on MQTT (port 8883).
 - [ ] GitHub repository for source control.
 - [ ] Accounts created: Supabase (free), Render (free), Vercel (free), HiveMQ Cloud (free).
 - [ ] Basic knowledge: Python (backend), JavaScript (frontend), SQL (database).
@@ -18,11 +23,11 @@
 ---
 
 ## 1. Database Setup (Supabase)
-**Goal:** Create secure, scalable storage for sensor data.  
+**Goal:** Create secure, scalable storage for sensor data.
 **Estimated time:** 1–2 days.
 
 - [ ] Create a new Supabase project.
-- [ ] In the SQL editor, run the schema script below:
+- [ ] In the SQL editor, run the schema script (or use the provided `web/backend/sql/schema.sql`). Example schema:
 
 ```sql
 CREATE TABLE readings (
@@ -45,44 +50,54 @@ CREATE INDEX readings_timestamp_idx ON readings(timestamp);
 - [ ] Insert sample data to validate the schema.
 - [ ] Record: Project URL, anon (public) key, and service role key (store securely).
 
-**Success criteria:** Table exists and sample data is insertable/queryable.  
-**Notes / Risks:** Monitor free-tier limits (storage, row inserts, bandwidth).
+Success criteria: table exists and sample data is insertable/queryable.
+
+Important note about uniqueness and idempotency
+- The backend uses upsert to make writes idempotent. To enforce uniqueness at the DB level, you can add a unique constraint on (device_id, timestamp) — but only after you remove any existing duplicates. See `web/backend/sql/add_unique_constraint.sql` for guidance and `web/backend/sql/cleanup_duplicates.sql` (included) to preview and remove duplicates before applying the constraint.
 
 ---
 
 ## 2. Backend Setup (Python + FastAPI on Render)
-**Goal:** Subscribe to MQTT, validate/process incoming messages, store them in Supabase, and expose APIs for the frontend.  
-**Estimated time:** 3–5 days.
+**Goal:** Subscribe to MQTT, validate/process incoming messages, store them in Supabase, and expose APIs for the frontend.
+**Estimated time:** 2–4 days (backend skeleton exists in `web/backend`).
 
-- [ ] Create project skeleton:
+Key implemented decisions (this repo):
+- Python runtime: 3.11 (run tests and venv with python3.11). Many dependencies in the Supabase stack require 3.11 compatibility.
+- MQTT: paho-mqtt with TLS (connects to broker on port 8883) and uses the dotted topic `smartpm25.sensor.data`.
+- DB writes: backend uses upsert (idempotent writes). The code defers Supabase client creation until startup and includes retry/backoff for transient errors.
+
+Quick local dev steps (in `web/backend`):
 
 ```bash
-mkdir backend && cd backend
-python -m venv venv
+python3.11 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- [ ] Install dependencies:
+Environment variables required (set in `.env` or Render env):
+- SUPABASE_URL
+- SUPABASE_KEY (service role or anon depending on usage; keep service role secret)
+- MQTT_BROKER
+- MQTT_USERNAME
+- MQTT_PASSWORD
+- BACKEND_LOG_PATH (optional; rotating file handler is configured)
+- DEBUG_MQTT_TOKEN (optional; used to gate the debug endpoint)
+
+Testing and utilities included:
+- `web/backend/test_mqtt.py` — TLS-enabled publisher (example device simulator) that publishes to `smartpm25.sensor.data`.
+- `web/backend/tests/test_integration.py` — pytest integration test that publishes a message and polls the API until the record appears.
+
+Render deployment notes
+- Repository Root for the Render service: set to `web/backend` (Render "Root Directory").
+- Build command: none (dependencies installed at runtime using the virtualenv created by Render), or set to `pip install -r requirements.txt` if custom build is required.
+- Start command (Render web service):
 
 ```bash
-pip install fastapi uvicorn paho-mqtt supabase
+uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-- [ ] Implement `main.py`:
-  - MQTT client subscribes to `smartpm25/sensor/data` (and optional status topics).
-  - Parse and validate incoming JSON (schema, checksum if available).
-  - Insert records into Supabase `readings` table.
-  - Add REST endpoints:
-    - `GET /api/readings/latest` → latest reading
-    - `GET /api/readings/history?period=24h|7d|30d&device_id=...` → historical data
-
-- [ ] Add configuration via environment variables (`SUPABASE_URL`, `SUPABASE_KEY`, `MQTT_BROKER`, `MQTT_USERNAME`, `MQTT_PASSWORD`).
-- [ ] Add robust logging, error handling, and MQTT reconnect logic.
-- [ ] Test locally with `uvicorn main:app --reload` and simulate MQTT messages (or use the device).
-- [ ] Deploy to Render (connect to GitHub repo and set environment variables in Render dashboard).
-
-**Success criteria:** Backend receives MQTT messages and writes to Supabase; APIs return expected JSON.  
-**Notes / Risks:** Keep service role keys secure; monitor logs for connectivity issues.
+Success criteria: backend receives MQTT messages (TLS) and writes to Supabase; APIs return expected JSON. Monitor logs in Render and locally.
 
 ---
 
@@ -128,13 +143,22 @@ npm install @supabase/supabase-js chart.js
 **Goal:** Validate end-to-end pipeline and user experience.  
 **Estimated time:** 2–3 days.
 
-- [ ] Point device(s) to HiveMQ and confirm messages appear in backend logs.
-- [ ] Verify records appear in Supabase.
+
+- [ ] Point device(s) to HiveMQ Cloud and confirm messages appear in backend logs (backend requires TLS and uses `smartpm25.sensor.data`).
+- [ ] Verify records appear in Supabase and that upserts prevent duplicates from duplicate deliveries.
 - [ ] Confirm frontend shows latest reading and history charts.
 - [ ] Validate AQI calculations and health messages.
 - [ ] Test multi-device flows and filters.
+- [ ] Run integration tests:
+
+```bash
+# from web/backend with venv active
+pytest -q
+```
+
 - [ ] Load test (basic): ensure latency < 10s and system handles expected message rate.
-- [ ] Collect initial user feedback (students/staff) and note UX improvements.
+
+Success criteria: full pipeline validated; tests pass and system is stable with expected message rates.
 
 **Success criteria:** Full pipeline validated; visible on staging/production URLs.
 
@@ -144,10 +168,13 @@ npm install @supabase/supabase-js chart.js
 **Goal:** Make the project reproducible and maintainable.  
 **Estimated time:** 1–2 days.
 
-- [ ] Add `docs/README.md` with quick-start steps for local dev, deploy, and DB setup.
-- [ ] Add `.env.example` with variable names and descriptions.
-- [ ] Document API endpoints and sample responses.
-- [ ] Provide a troubleshooting section (common MQTT, network, and Supabase errors).
+
+- [ ] Add `docs/README.md` with quick-start steps for local dev, deploy, and DB setup (this checklist is a companion).
+- [ ] Add `.env.example` with variable names and descriptions (see `web/backend/.env.example`).
+- [ ] Document API endpoints and sample responses (see `web/backend/README.md`).
+- [ ] Provide a troubleshooting section (common MQTT, network, and Supabase errors). The backend logs helpful MQTT flags (mid/dup/retain) on receipt.
+
+Success criteria: new team members can follow README to run the system locally.
 
 **Success criteria:** New team members can follow README to run the system locally.
 
