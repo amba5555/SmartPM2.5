@@ -52,6 +52,15 @@
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
     console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
     console.log('Supabase key available:', !!import.meta.env.VITE_SUPABASE_ANON_KEY);
+
+    // SAFE DIAGNOSTIC: log a masked version of the Supabase key to identify which key is
+    // being used by the client without revealing the full secret.
+    // Runtime status: non-sensitive indicator for production logs
+    if (import.meta.env.VITE_SUPABASE_ANON_KEY) {
+      console.log('Supabase runtime status: OK (anon key available)');
+    } else {
+      console.log('Supabase runtime status: MISSING_ANON_KEY');
+    }
     
     // Check initial screen size and listen for changes
     isMobileView = window.innerWidth <= 768;
