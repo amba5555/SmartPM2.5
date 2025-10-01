@@ -52,6 +52,21 @@
     console.log('Page mounted, backend URL:', BACKEND_BASE.toString());
     console.log('Supabase URL:', import.meta.env.VITE_SUPABASE_URL);
     console.log('Supabase key available:', !!import.meta.env.VITE_SUPABASE_ANON_KEY);
+
+    // SAFE DIAGNOSTIC: log a masked version of the Supabase key to identify which key is
+    // being used by the client without revealing the full secret.
+    function maskKey(k) {
+      if (!k) return '<missing>';
+      try {
+        if (k.startsWith('sb_publishable_')) return k.slice(0,16) + '…' + k.slice(-4);
+        if (k.startsWith('sb_secret_')) return k.slice(0,10) + '…' + k.slice(-4);
+        if (k.startsWith('eyJ')) return 'legacy_jwt…' + k.slice(-4);
+        return k.slice(0,6) + '…' + k.slice(-4);
+      } catch (e) {
+        return '<mask_error>';
+      }
+    }
+    console.log('Supabase key (masked):', maskKey(import.meta.env.VITE_SUPABASE_ANON_KEY));
     
     // Check initial screen size and listen for changes
     isMobileView = window.innerWidth <= 768;
