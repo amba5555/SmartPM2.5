@@ -30,3 +30,4 @@ pids
 
 # Coverage directory
 coverage/
+.env*.local
