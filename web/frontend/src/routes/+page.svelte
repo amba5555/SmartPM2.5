@@ -55,18 +55,12 @@
 
     // SAFE DIAGNOSTIC: log a masked version of the Supabase key to identify which key is
     // being used by the client without revealing the full secret.
-    function maskKey(k) {
-      if (!k) return '<missing>';
-      try {
-        if (k.startsWith('sb_publishable_')) return k.slice(0,16) + '…' + k.slice(-4);
-        if (k.startsWith('sb_secret_')) return k.slice(0,10) + '…' + k.slice(-4);
-        if (k.startsWith('eyJ')) return 'legacy_jwt…' + k.slice(-4);
-        return k.slice(0,6) + '…' + k.slice(-4);
-      } catch (e) {
-        return '<mask_error>';
-      }
+    // Runtime status: non-sensitive indicator for production logs
+    if (import.meta.env.VITE_SUPABASE_ANON_KEY) {
+      console.log('Supabase runtime status: OK (anon key available)');
+    } else {
+      console.log('Supabase runtime status: MISSING_ANON_KEY');
     }
-    console.log('Supabase key (masked):', maskKey(import.meta.env.VITE_SUPABASE_ANON_KEY));
     
     // Check initial screen size and listen for changes
     isMobileView = window.innerWidth <= 768;
