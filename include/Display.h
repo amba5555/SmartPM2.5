@@ -14,9 +14,11 @@ public:
     void showReadings(const float pm2_5, const int aqi, const String& healthMsg);
     void showError(const String& error);
     void showStatus(const String& status);
+    
+    // Public access to OLED for partial updates (anti-flicker)
+    Adafruit_SSD1306 _oled;
 
 private:
-    Adafruit_SSD1306 _oled;
     void clearAndSetBasicLayout();
 };
 
