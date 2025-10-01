@@ -10,7 +10,7 @@ node_modules/
 # Local env files (inherit from root .env instead)
 .env*
 !.env.example
-!.env.production
+# Do NOT un-ignore .env.production - keep production env files out of the repo
 
 # IDE files
 .vscode/
