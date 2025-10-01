@@ -49,3 +49,5 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
+web/frontend/.svelte-kit/
+web/frontend/build/
