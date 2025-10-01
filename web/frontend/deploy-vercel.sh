@@ -39,7 +39,7 @@ vercel --prod \
   --name "${PROJECT_NAME}" \
   --build-env VITE_BACKEND_URL="https://smartpm2-5.onrender.com" \
   --build-env VITE_SUPABASE_URL="https://nbwcgngmnopimaapaeni.supabase.co" \
-  --build-env VITE_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5id2Nnbmdtbm9waW1hYXBhZW5pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxMzQxMDcsImV4cCI6MjA3NDcxMDEwN30.h20RJzgTYxRY0lP_wPU2zKpnTsNmy_kt-O5g_eVQvSQ"
+  --build-env VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-}"
 
 echo ""
 echo "✅ Deployment completed!"
