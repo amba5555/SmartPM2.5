@@ -11,6 +11,7 @@ node_modules/
 .env*
 !.env.example
 # Do NOT un-ignore .env.production - keep production env files out of the repo
+!.env.production.example
 
 # IDE files
 .vscode/
